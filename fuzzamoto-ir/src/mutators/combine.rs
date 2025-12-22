@@ -28,9 +28,19 @@ impl<R: RngCore> Splicer<R> for CombineMutator {
         splice_with: &Program,
         rng: &mut R,
     ) -> MutatorResult {
+        self.splice_from(program, splice_with, rng, 0)
+    }
+
+    fn splice_from(
+        &mut self,
+        program: &mut Program,
+        splice_with: &Program,
+        rng: &mut R,
+        min_index: usize,
+    ) -> MutatorResult {
         let combine_index = program
-            .get_random_instruction_index(rng, &InstructionContext::Global)
-            .expect("Global instruction index should always exist");
+            .get_random_instruction_index_from(rng, &InstructionContext::Global, min_index)
+            .ok_or(MutatorError::NoMutationsAvailable)?;
 
         let mut builder = ProgramBuilder::new(program.context.clone());
 

@@ -14,13 +14,23 @@ impl<R: RngCore> Mutator<R> for InputMutator {
         &mut self,
         program: &mut Program,
         rng: &mut R,
+        meta: Option<&PerTestcaseMetadata>,
+    ) -> MutatorResult {
+        self.mutate_from(program, rng, meta, 0)
+    }
+
+    fn mutate_from(
+        &mut self,
+        program: &mut Program,
+        rng: &mut R,
         _meta: Option<&PerTestcaseMetadata>,
+        min_index: usize,
     ) -> MutatorResult {
         let Some(candidate_instruction) = program
             .instructions
             .iter()
             .enumerate()
-            .filter(|(_, instruction)| instruction.is_input_mutable())
+            .filter(|(i, instruction)| *i >= min_index && instruction.is_input_mutable())
             .choose(rng)
         else {
             return Err(MutatorError::NoMutationsAvailable);

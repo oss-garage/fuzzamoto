@@ -82,7 +82,10 @@ where
         if *self.enabled.borrow() && matches!(exit_kind, ExitKind::Timeout) {
             let timeouts = state.metadata_or_insert_with(TimeoutsToVerify::new);
             log::info!("Timeout detected, adding to verification queue!");
-            timeouts.push(input.clone());
+            // If we're using incremental snapshots, clear frozen_prefix_len.
+            let mut timeout_input = input.clone();
+            timeout_input.frozen_prefix_len = None;
+            timeouts.push(timeout_input);
             return Ok(false);
         }
 
