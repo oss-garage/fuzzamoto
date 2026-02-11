@@ -165,6 +165,9 @@ pub struct FuzzerOptions {
         help = "Profile that defines which generators are enabled"
     )]
     pub profile: Profile,
+
+    #[arg(long, help = "Enable incremental snapshots", default_value_t = false)]
+    pub incremental_snapshots: bool,
 }
 
 fn unix_time() -> u64 {

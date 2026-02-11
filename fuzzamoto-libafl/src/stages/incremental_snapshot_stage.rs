@@ -21,6 +21,7 @@ pub enum SnapshotPlacementPolicy {
 }
 
 pub struct IncrementalSnapshotStage<IS, S, OT> {
+    enabled: bool,
     inner_stage: IS,
     policy: SnapshotPlacementPolicy,
     max_reuse_count: usize,
@@ -28,8 +29,14 @@ pub struct IncrementalSnapshotStage<IS, S, OT> {
 }
 
 impl<IS, S, OT> IncrementalSnapshotStage<IS, S, OT> {
-    pub fn new(inner_stage: IS, policy: SnapshotPlacementPolicy, max_reuse_count: usize) -> Self {
+    pub fn new(
+        enabled: bool,
+        inner_stage: IS,
+        policy: SnapshotPlacementPolicy,
+        max_reuse_count: usize,
+    ) -> Self {
         Self {
+            enabled,
             inner_stage,
             policy,
             max_reuse_count,
@@ -82,6 +89,15 @@ where
         state: &mut S,
         manager: &mut EM,
     ) -> Result<(), Error> {
+        if !self.enabled {
+            if self.inner_stage.should_restart(state)? {
+                self.inner_stage.perform(fuzzer, executor, state, manager)?;
+            }
+            let _ = self.inner_stage.clear_progress(state);
+
+            return Ok(());
+        }
+
         // No incremental snapshot should exist at this point.
         assert!(!executor.helper.nyx_process.aux_tmp_snapshot_created());
 
