@@ -318,6 +318,39 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                 self.byte_array_mutator.mutate_bytes(bytes);
                 Operation::LoadBytes(bytes.clone()) // TODO this clone is not needed
             }
+            Operation::BuildPayToBareMulti {
+                required,
+                private_keys,
+            } => {
+                let n = private_keys.len() as u8;
+                let new_required = if n > 0 {
+                    rng.gen_range(1..=n)
+                } else {
+                    *required
+                };
+                let mut new_keys = private_keys.clone();
+                if !new_keys.is_empty() {
+                    let idx = rng.gen_range(0..new_keys.len());
+                    let mut key_bytes: Vec<u8> = new_keys[idx].into();
+                    let mut valid_key = false;
+                    for _ in 1..=10 {
+                        self.byte_array_mutator.mutate_bytes(&mut key_bytes);
+                        key_bytes.resize(32, 0);
+                        if PrivateKey::from_slice(&key_bytes, NetworkKind::Main).is_ok() {
+                            valid_key = true;
+                            break;
+                        }
+                    }
+                    if !valid_key {
+                        key_bytes = vec![0x1u8; 32];
+                    }
+                    new_keys[idx] = key_bytes.try_into().unwrap();
+                }
+                Operation::BuildPayToBareMulti {
+                    required: new_required,
+                    private_keys: new_keys,
+                }
+            }
             op => op.clone(),
         };
 

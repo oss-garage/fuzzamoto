@@ -21,11 +21,12 @@ enum OutputType {
     PayToPubKeyHash,
     PayToWitnessPubKeyHash,
     PayToTaproot,
+    PayToBareMulti,
     OpReturn,
 }
 
 fn get_random_output_type<R: RngCore>(rng: &mut R) -> OutputType {
-    match rng.gen_range(0..8) {
+    match rng.gen_range(0..9) {
         0 => OutputType::PayToWitnessScriptHash,
         1 => OutputType::PayToAnchor,
         2 => OutputType::PayToScriptHash,
@@ -33,6 +34,7 @@ fn get_random_output_type<R: RngCore>(rng: &mut R) -> OutputType {
         4 => OutputType::PayToPubKeyHash,
         5 => OutputType::PayToWitnessPubKeyHash,
         6 => OutputType::PayToTaproot,
+        7 => OutputType::PayToBareMulti,
         _ => OutputType::OpReturn,
     }
 }
@@ -114,6 +116,7 @@ fn build_outputs<R: RngCore>(
                 )
             }
             OutputType::PayToTaproot => build_taproot_scripts(builder, rng),
+            OutputType::PayToBareMulti => build_bare_multi_scripts(builder, rng),
         };
 
         let amount_var =
@@ -544,6 +547,26 @@ fn build_taproot_scripts<R: RngCore>(builder: &mut ProgramBuilder, rng: &mut R) 
 fn random_merkle_path<R: RngCore>(rng: &mut R) -> Vec<[u8; 32]> {
     let depth = rng.gen_range(0..=4);
     (0..depth).map(|_| random_node_hash(rng)).collect()
+}
+
+fn build_bare_multi_scripts<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+) -> IndexedVariable {
+    let n = rng.gen_range(1u8..=3u8);
+    let required = rng.gen_range(1u8..=n);
+    let private_keys: Vec<[u8; 32]> = (0..n).map(|_| gen_secret_key_bytes(rng)).collect();
+
+    let sighash_flags_var =
+        builder.force_append_expect_output(vec![], &Operation::LoadSigHashFlags(0));
+
+    builder.force_append_expect_output(
+        vec![sighash_flags_var.index],
+        &Operation::BuildPayToBareMulti {
+            required,
+            private_keys,
+        },
+    )
 }
 
 fn gen_secret_key_bytes<R: RngCore>(rng: &mut R) -> [u8; 32] {
