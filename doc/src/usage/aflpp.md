@@ -11,11 +11,11 @@ All fuzzamoto [scenarios](../design/scenarios.md) can be fuzzed with
 
 The [Dockerfile](https://github.com/dergoegge/fuzzamoto/blob/master/Dockerfile)
 at the root of the repository contains an example setup for running fuzzamoto
-fuzzing campaigns with AFL++.
+fuzzing campaigns with AFL++. The `aflpp` build target produces the image.
 
 Build the container image:
 ```
-docker build -t fuzzamoto .
+docker build --target aflpp -t fuzzamoto .
 ```
 
 You can customize the Bitcoin Core source when building the image using the following build arguments:
@@ -30,9 +30,9 @@ You can customize the Bitcoin Core source when building the image using the foll
 Examples:
 
 ```
-docker build --build-arg PR_NUMBER=1234 -t fuzzamoto .
-docker build --build-arg BITCOIN_COMMIT=abc123 -t fuzzamoto .
-docker build --build-arg OWNER=abc123 --build-arg PR_NUMBER=1 -t fuzzamoto .
+docker build --target aflpp --build-arg PR_NUMBER=1234 -t fuzzamoto .
+docker build --target aflpp --build-arg BITCOIN_COMMIT=abc123 -t fuzzamoto .
+docker build --target aflpp --build-arg OWNER=abc123 --build-arg PR_NUMBER=1 -t fuzzamoto .
 ```
 
 And then create a new container from it:
@@ -67,7 +67,7 @@ Once the seed corpus is ready, you'll be able to start the fuzzing campaign:
 Running a multi-core campaign is best practice to make use of all available
 cores. This can be done with
 [`AFL_Runner`](https://github.com/0xricksanchez/AFL_Runner) (installed in the
-[Dockerfile](https://github.com/dergoegge/fuzzamoto/blob/master/Dockerfile)).
+`aflpp` target of the [Dockerfile](https://github.com/dergoegge/fuzzamoto/blob/master/Dockerfile)).
 
 ### Example: `http-server`
 

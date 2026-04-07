@@ -13,16 +13,13 @@ jobs:
       matrix:
         include:
           - name: aflpp
-            context: .
-            file: ./Dockerfile
+            target: aflpp
             tag: fuzzamoto:ci
           - name: libafl
-            context: .
-            file: ./Dockerfile.libafl
+            target: libafl
             tag: fuzzamoto-libafl:ci
           - name: coverage
-            context: .
-            file: ./Dockerfile.coverage
+            target: coverage
             tag: fuzzamoto-coverage:ci
 
     steps:
@@ -35,8 +32,8 @@ jobs:
       - name: Build image - ${{ matrix.name }}
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
+          context: .
+          target: ${{ matrix.target }}
           push: false # build only - don't push to registry
           tags: ${{ matrix.tag }}
           platforms: linux/amd64

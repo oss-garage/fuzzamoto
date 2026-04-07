@@ -1,3 +1,0 @@
-FROM fuzzamoto-coverage
-
-ENTRYPOINT []

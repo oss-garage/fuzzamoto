@@ -19,14 +19,12 @@ jobs:
         include:
            # Enable this once we have more self-hosted runners
            # - name: aflpp
-           #   context: .
-           #   file: ./Dockerfile
+           #   target: aflpp
            #   scenario-name: http-server
            #   tag: fuzzamoto:ci
            #   justfile-name: scenario-http-server.justfile
            - name: libafl
-             context: .
-             file: ./Dockerfile.libafl
+             target: libafl
              scenario-name: ir
              tag: fuzzamoto-libafl:ci
              justfile-name: libafl.justfile
@@ -46,8 +44,8 @@ jobs:
       - name: Build image - ${{ matrix.name }}
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
+          context: .
+          target: ${{ matrix.target }}
           push: false # build only - don't push to registry
           load: true
           tags: ${{ matrix.tag }}
@@ -58,7 +56,7 @@ jobs:
           docker run --privileged -v ./:/fuzzamoto -v /corpus:/tmp/out ${{ matrix.tag }} just -f /ci/${{ matrix.justfile-name }} test
       - name: Build coverage image
         run: |
-          docker build -t fuzzamoto-coverage -f Dockerfile.coverage .
+          docker build --target coverage -t fuzzamoto-coverage .
       - name: Run coverage
         run: |
           docker run --privileged -v /output:/mnt/output -v /corpus/cpu_000/queue:/mnt/corpus fuzzamoto-coverage /fuzzamoto/target/release/scenario-${{ matrix.scenario-name }} 

@@ -7,7 +7,7 @@ different than if you were to run `fuzzamoto-cli init`:
 - fuzzamoto's nyx feature should be disabled as coverage tooling does not use snapshots.
 - a corpus for the specific scenario is required
 
-The `Dockerfile.coverage` file can be used to run a corpus against a specific scenario.
+The `coverage` target in the [Dockerfile](https://github.com/dergoegge/fuzzamoto/blob/master/Dockerfile) can be used to run a corpus against a specific scenario.
 Both a host directory and a corpus directory must be mounted.
 
 Example:
@@ -17,7 +17,7 @@ export HOST_OUTPUT_DIR="$(pwd)/coverage-output"
 export HOST_CORPUS_DIR="$(pwd)/your-corpus"
 export SCENARIO="name"
 
-docker build -t fuzzamoto-coverage -f Dockerfile.coverage .
+docker build --target coverage -t fuzzamoto-coverage .
 docker run --privileged -it \
     -v $HOST_OUTPUT_DIR:/mnt/output \
     -v $HOST_CORPUS_DIR:/mnt/corpus \
@@ -28,11 +28,11 @@ docker run --privileged -it \
 # Parallelize coverage measurement
 Generating coverage reports is often time-consuming.
 In that case, you can benefit from parallelizing the coverage measurement.
-To use it, first, you need to build the images defined in both `Dockerfile.coverage` and `Dockerfile.coverage.generic`.
+To use it, first, you need to build the `coverage` and `coverage-generic` targets.
 
 ```bash
-docker build -f Dockerfile.coverage -t fuzzamoto-coverage .
-docker build -f Dockerfile.coverage.generic -t fuzzamoto-coverage-generic .
+docker build --target coverage -t fuzzamoto-coverage .
+docker build --target coverage-generic -t fuzzamoto-coverage-generic .
 ```
 
 After those images are built, copy the image ID from `fuzzamoto-coverage-generic`.

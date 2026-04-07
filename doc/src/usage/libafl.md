@@ -11,15 +11,15 @@ is a LibAFL based fuzzer for Fuzzamoto operating on the fuzzamoto
 operates on the [IR
 scenario](https://github.com/dergoegge/fuzzamoto/tree/master/fuzzamoto-scenarios/bin/ir.rs).
 
-The
-[Dockerfile.libafl](https://github.com/dergoegge/fuzzamoto/blob/master/Dockerfile.libafl)
+The `libafl` target in the
+[Dockerfile](https://github.com/dergoegge/fuzzamoto/blob/master/Dockerfile)
 at the root of the repository contains an example setup for running fuzzamoto
 fuzzing campaigns with libafl.
 
 Build the container image:
 
 ```
-docker build -f Dockerfile.libafl -t fuzzamoto-libafl .
+docker build --target libafl -t fuzzamoto-libafl .
 ```
 
 You can customize the Bitcoin Core source when building the image using the following build arguments:
@@ -34,9 +34,9 @@ You can customize the Bitcoin Core source when building the image using the foll
 Examples:
 
 ```
-docker build --build-arg PR_NUMBER=1234 -f Dockerfile.libafl -t fuzzamoto-libafl .
-docker build --build-arg BITCOIN_COMMIT=abc123 -f Dockerfile.libafl -t fuzzamoto-libafl .
-docker build --build-arg OWNER=abc123 --build-arg PR_NUMBER=1 -f Dockerfile.libafl -t fuzzamoto-libafl .
+docker build --target libafl --build-arg PR_NUMBER=1234 -t fuzzamoto-libafl .
+docker build --target libafl --build-arg BITCOIN_COMMIT=abc123 -t fuzzamoto-libafl .
+docker build --target libafl --build-arg OWNER=abc123 --build-arg PR_NUMBER=1 -t fuzzamoto-libafl .
 ```
 
 And then create a new container from it (mounting the current directory to
