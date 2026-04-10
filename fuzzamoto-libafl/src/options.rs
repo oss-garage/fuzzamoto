@@ -1,5 +1,6 @@
 use rand::{Rng, RngCore};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, ValueEnum};
 use libafl_bolts::core_affinity::{CoreId, Cores};
@@ -114,6 +115,13 @@ pub struct FuzzerOptions {
     pub iterations: Option<u64>,
 
     #[arg(
+        long,
+        help = "Stop fuzzing after the given duration (e.g. 30s, 5m, 2h)",
+        value_parser = parse_duration
+    )]
+    pub stop_after: Option<Duration>,
+
+    #[arg(
         short = 'r',
         help = "An input to rerun, instead of starting to fuzz. Will ignore all other settings."
     )]
@@ -165,6 +173,36 @@ pub struct FuzzerOptions {
         help = "Profile that defines which generators are enabled"
     )]
     pub profile: Profile,
+}
+
+fn parse_duration(s: &str) -> Result<Duration, String> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Err("duration string cannot be empty".to_string());
+    }
+
+    let (num, suffix) = if let Some(n) = s.strip_suffix('s') {
+        (n, "s")
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, "m")
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, "h")
+    } else {
+        return Err("duration must end with 's', 'm', or 'h' (e.g. 30s, 5m, 2h)".to_string());
+    };
+
+    let value: u64 = num
+        .parse()
+        .map_err(|_| format!("invalid number in duration: '{num}'"))?;
+
+    let secs = match suffix {
+        "s" => value,
+        "m" => value * 60,
+        "h" => value * 3600,
+        _ => unreachable!(),
+    };
+
+    Ok(Duration::from_secs(secs))
 }
 
 fn unix_time() -> u64 {

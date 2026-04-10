@@ -1,4 +1,11 @@
-use std::{borrow::Cow, cell::RefCell, marker::PhantomData, process, rc::Rc, time::Duration};
+use std::{
+    borrow::Cow,
+    cell::RefCell,
+    marker::PhantomData,
+    process,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use fuzzamoto_ir::{
     AddConnectionGenerator, AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator,
@@ -548,6 +555,16 @@ where
 
             // It's important, that we store the state before restarting!
             // Else, the parent will not respawn a new child and quit.
+            self.mgr.on_restart(state)?;
+        } else if let Some(stop_after) = self.options.stop_after {
+            let start = Instant::now();
+            loop {
+                fuzzer.fuzz_loop_for(stages, executor, state, &mut self.mgr, 100)?;
+                if start.elapsed() >= stop_after {
+                    break;
+                }
+            }
+
             self.mgr.on_restart(state)?;
         } else {
             fuzzer.fuzz_loop(stages, executor, state, &mut self.mgr)?;
