@@ -154,8 +154,7 @@ design overview.</p>
 signature (<code>get_input_variables</code>, <code>get_output_variables</code>,
 <code>get_inner_output_variables</code>), scope rules (<code>is_block_begin</code>, <code>is_block_end</code>,
 <code>is_matching_block_begin</code>, <code>allow_insertion_in_block</code>), and
-mutation/minimization behaviour (<code>is_operation_mutable</code>, <code>mutates_nth_input</code>,
-<code>is_noppable</code>).</li>
+mutation/minimization behaviour (<code>is_operation_mutable</code>, <code>is_noppable</code>).</li>
 <li>Update <code>fuzzamoto-ir/src/instruction.rs</code> so the builder and mutators can spot
 context changes (<code>entered_context_after_execution</code>) and know whether the
 operation can be mutated or nopped out.</li>
