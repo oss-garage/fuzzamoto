@@ -467,9 +467,12 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>BeginWitnessStack</code></td><td align="left">Begins building a witness stack.</td></tr>
 <tr><td align="left"><code>AddWitness</code></td><td align="left">Adds an item to the witness stack.</td></tr>
 <tr><td align="left"><code>EndWitnessStack</code></td><td align="left">Finishes building the witness stack.</td></tr>
-<tr><td align="left"><strong>Compact Block</strong></td><td align="left"><strong>Construct a compact block.</strong></td></tr>
-<tr><td align="left"><code>BuildCompactBlock</code></td><td align="left">Builds a compact block.</td></tr>
-<tr><td align="left"><strong>Blocktxn building</strong></td><td align="left"><strong>Construct a BIP152 blocktxn message</strong></td></tr>
+<tr><td align="left"><strong>Compact block building</strong></td><td align="left"><strong>Construct a BIP152 compact block.</strong></td></tr>
+<tr><td align="left"><code>BeginPrefillTransactions</code></td><td align="left">Begins building the prefill transaction list for a compact block.</td></tr>
+<tr><td align="left"><code>AddPrefillTx</code></td><td align="left">Adds a transaction from the block to the prefill list.</td></tr>
+<tr><td align="left"><code>EndPrefillTransactions</code></td><td align="left">Finishes building the prefill list.</td></tr>
+<tr><td align="left"><code>BuildCompactBlock</code></td><td align="left">Builds a compact block from a block, a nonce, and a prefill list.</td></tr>
+<tr><td align="left"><strong>Blocktxn building</strong></td><td align="left"><strong>Construct a BIP152 blocktxn message.</strong></td></tr>
 <tr><td align="left"><code>BeginBuildBlockTxn</code></td><td align="left">Begins building a blocktxn message after sending a compact block.</td></tr>
 <tr><td align="left"><code>AddTxToBlockTxn</code></td><td align="left">Adds a transaction to the blocktxn message.</td></tr>
 <tr><td align="left"><code>EndBuildBlockTxn</code></td><td align="left">Finishes building a blocktxn message.</td></tr>
@@ -552,6 +555,8 @@ instructions</li>
 <li><code>HeaderGenerator</code>: Generates instructions to build a header</li>
 <li><code>AddTxToBlockGenerator</code>: Generates instructions to add a transaction to a
 block</li>
+<li><code>CompactBlockGenerator</code>: Generates instructions to build and send a compact
+block for an existing block, with a randomly chosen prefill transaction list</li>
 <li><code>OneParentOneChildGenerator</code>: Generates instructions for building two new
 transactions (a 1-parent 1-child package) and sending them to a node</li>
 <li>... see
