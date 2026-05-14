@@ -1241,6 +1241,7 @@ dependencies = [
 name = "fuzzamoto"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bip324",
  "bitcoin",
  "bitcoin-io 0.1.3",
