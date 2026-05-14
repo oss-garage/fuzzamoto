@@ -718,15 +718,48 @@ the input either through <code>stdin</code> or the <code>FUZZAMOTO_INPUT</code> 
 <p><code>--features reproduce</code> is used to enable features useful for reproduction, e.g.
 inherit stdout from the target application, such that any logs, stack traces,
 etc. are printed to the terminal.</p>
-<h2 id="http-server-example"><a class="header" href="#http-server-example"><code>http-server</code> example</a></h2>
-<p>Run the scneario with the input supplied through <code>stdin</code> and pass the right
+<h2 id="http-server-example-out-of-vm-execution"><a class="header" href="#http-server-example-out-of-vm-execution"><code>http-server</code> example (Out-of-VM execution)</a></h2>
+<p>You can run the scenario directly to debug out-of-VM execution with a
 <code>bitcoind</code> binary:</p>
+<p>First, compile the scenario with the <code>reproduce</code> features:</p>
+<pre><code>cargo build --release -p fuzzamoto-scenarios --features &quot;fuzzamoto/reproduce&quot;,&quot;force_send_and_ping&quot;
+</code></pre>
+<p>Then, run the scenario with the input supplied through <code>stdin</code>:</p>
 <pre><code>cat ./testcase.dat | RUST_LOG=info ./target/release/scenario-http-server ./bitcoind
 # Use &quot;echo '&lt;input base64&gt;' | base64 --decode | ...&quot; if you have the input as a base64 string
 </code></pre>
 <p>Or alternatively using <code>FUZZAMOTO_INPUT</code>:</p>
 <pre><code>FUZZAMOTO_INPUT=$PWD/testcase.dat RUST_LOG=info ./target/release/scenario-http-server ./bitcoind
 </code></pre>
+<h2 id="ir-example-in-vm-execution"><a class="header" href="#ir-example-in-vm-execution"><code>ir</code> example (In-VM execution)</a></h2>
+<p>You can also use the <code>-r</code> option to debug in-VM execution of the scenario.</p>
+<p>First, build all the packages with both the <code>fuzz</code> and <code>nyx_log</code> features:</p>
+<pre><code>cd /fuzzamoto
+BITCOIND_PATH=/bitcoin/build_fuzz/bin/bitcoind cargo build --workspace --release --features fuzz,nyx_log,inherit_stdout
+</code></pre>
+<p>The <code>nyx_log</code> feature is necessary because it allows us to retrieve the
+<code>bitcoind</code> log later. You can also add the <code>inherit_stdout</code> feature if you want
+more verbose logs from <code>bitcoind</code>.</p>
+<p>Then, build the crash handler and initialize the nyx share dir as usual:</p>
+<pre><code># Build the crash handler
+clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
+    ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
+# Initialize the nyx share dir
+./target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-ir \
+    --crash-handler /fuzzamoto/libnyx_crash_handler.so \
+    --bitcoind /bitcoin/build_fuzz/bin/bitcoind \
+    --scenario ./target/release/scenario-ir \
+    --nyx-dir ./target/release/
+</code></pre>
+<p>Now, run the fuzzer with the <code>-r</code> option:</p>
+<pre><code>RUST_LOG=info ./target/release/fuzzamoto-libafl \
+    --input /tmp/in --output /tmp/out/ \
+    --share /tmp/fuzzamoto_scenario-ir/ \
+    -r &lt;path to the testcase&gt; \
+    --cores 0 --verbose
+</code></pre>
+<p>This executes the given testcase once in reproduce mode.</p>
+<p>After this, the <code>bitcoind</code> log is available at <code>/tmp/out/workdir/dump/primary.log</code>.</p>
 <h2 id="troubleshooting-1"><a class="header" href="#troubleshooting-1">Troubleshooting</a></h2>
 <ul>
 <li>
