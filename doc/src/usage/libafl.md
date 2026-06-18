@@ -59,7 +59,7 @@ Then, build the crash handler and initialize the nyx share dir:
 
 ```
 # Build the crash handler
-clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
+clang-<version> -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
     ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
 # Initialize the nyx share dir
 ./target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-ir \

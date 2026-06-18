@@ -1,0 +1,13 @@
+diff --git a/src/afl-cc.c b/src/afl-cc.c
+index 72b94adf..f113452a 100644
+--- a/src/afl-cc.c
++++ b/src/afl-cc.c
+@@ -2139,7 +2139,7 @@ void add_sanitizers(aflcc_state_t *aflcc, char **envp) {
+ 
+         }
+ 
+-        if (!found) { insert_param(aflcc, "-flto"); }
++        // if (!found) { insert_param(aflcc, "-flto"); }
+         aflcc->have_flto = 1;
+ 
+       }

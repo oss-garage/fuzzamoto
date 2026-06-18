@@ -4,7 +4,7 @@ compile:
 
 [working-directory: '/fuzzamoto']
 compile_nyx: compile
-	clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
+	clang-21 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
 	./target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-ir --crash-handler /fuzzamoto/libnyx_crash_handler.so --bitcoind /bitcoin/build_fuzz/bin/bitcoind --scenario ./target/release/scenario-ir --nyx-dir ./target/release/
 
 [working-directory: '/fuzzamoto']
