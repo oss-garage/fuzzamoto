@@ -7,13 +7,16 @@ use libafl::{
     common::HasMetadata,
     corpus::{Corpus, CorpusId, NopCorpus},
     inputs::BytesInput,
-    mutators::{HavocScheduledMutator, MutationResult, Mutator, havoc_mutations},
+    mutators::{
+        HavocScheduledMutator, MutationResult, Mutator, Tokens, havoc_mutations, tokens_mutations,
+    },
     random_corpus_id,
     state::{HasCorpus, HasRand, StdState},
 };
 use libafl_bolts::{
     HasLen, Named,
     rands::{Rand, StdRand},
+    tuples::Merge,
 };
 use rand::RngCore;
 
@@ -288,13 +291,82 @@ impl<M, R> Named for IrGenerator<M, R> {
     }
 }
 
+/// A dictionary of Bitcoin-significant byte sequences for the raw byte mutator.
+///
+/// `OperationMutator` drives all `LoadBytes` mutations through [`LibAflByteMutator`], and
+/// `LoadBytes` values end up as raw output/input scripts (`BuildRawScripts`), witness stack
+/// elements (`AddWitness`) and raw p2p message payloads. Plain havoc rarely assembles a valid
+/// opcode sequence or a recognizable script template by chance, so the script interpreter and the
+/// structured parsers behind these buffers stay shallowly explored. Feeding the havoc stage a
+/// dictionary of real Script opcodes and standard script templates lets `TokenInsert`/
+/// `TokenReplace` splice meaningful fragments in, reaching interpreter branches that random bytes
+/// almost never hit.
+fn bitcoin_script_dictionary() -> Tokens {
+    // Single-byte Script opcodes. Values mirror Bitcoin Core's `script/script.h`.
+    let opcodes: &[u8] = &[
+        // Push value
+        0x00, // OP_0 / OP_FALSE
+        0x4f, // OP_1NEGATE
+        0x51, // OP_1 / OP_TRUE
+        0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, // OP_2 ..= OP_8
+        0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60, // OP_9 ..= OP_16
+        // Push-data length prefixes
+        0x4c, 0x4d, 0x4e, // OP_PUSHDATA1/2/4
+        // Control flow
+        0x61, // OP_NOP
+        0x63, 0x64, 0x67, 0x68, // OP_IF, OP_NOTIF, OP_ELSE, OP_ENDIF
+        0x69, 0x6a, // OP_VERIFY, OP_RETURN
+        // Stack / alt-stack ops (OP_TOALTSTACK .. OP_TUCK)
+        0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, //
+        0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, // .. OP_DROP/OP_DUP/OP_SWAP/OP_TUCK
+        // Splice / size (OP_CAT .. OP_SIZE, splice ops disabled)
+        0x7e, 0x7f, 0x80, 0x81, 0x82, //
+        // Bitwise / equality (OP_INVERT .. OP_EQUALVERIFY, bitwise ops disabled)
+        0x83, 0x84, 0x85, 0x86, 0x87, 0x88, // .. OP_EQUAL/OP_EQUALVERIFY
+        // Numeric / arithmetic ops (OP_1ADD .. OP_WITHIN)
+        0x8b, 0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91, 0x92, 0x93, 0x94, //
+        0x95, 0x96, 0x97, 0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, //
+        0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, // .. OP_WITHIN
+        // Crypto
+        0xa6, 0xa7, 0xa8, 0xa9, 0xaa, // OP_RIPEMD160 ..= OP_HASH256
+        0xab, // OP_CODESEPARATOR
+        0xac, 0xad, // OP_CHECKSIG, OP_CHECKSIGVERIFY
+        0xae, 0xaf, // OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY
+        // Locktime / Taproot
+        0xb1, 0xb2, // OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY
+        0xba, // OP_CHECKSIGADD (tapscript)
+    ];
+
+    let mut tokens = Tokens::new();
+    tokens.add_tokens(opcodes.iter().map(|op| vec![*op]));
+
+    // Multi-byte structural templates: standard scriptPubKey shapes, witness program prefixes and
+    // a few protocol-level constants. Inserting these whole lets the mutator land on standard
+    // output types (and their near-misses) in one step.
+    let templates: &[&[u8]] = &[
+        &[0x00, 0x14], // P2WPKH prefix: OP_0 <20-byte push>
+        &[0x00, 0x20], // P2WSH prefix:  OP_0 <32-byte push>
+        &[0x51, 0x20], // P2TR prefix:   OP_1 <32-byte push>
+        &[0x76, 0xa9, 0x14], // P2PKH head: OP_DUP OP_HASH160 <20-byte push>
+        &[0x88, 0xac], // P2PKH tail: OP_EQUALVERIFY OP_CHECKSIG
+        &[0xa9, 0x14], // P2SH head:  OP_HASH160 <20-byte push>
+        &[0x87], // P2SH tail:  OP_EQUAL
+        &[0xc0], // Tapscript leaf version
+        &[0x50], // Taproot annex prefix
+        &[0x00, 0x01], // segwit marker+flag
+    ];
+    tokens.add_tokens(templates.iter().map(|t| t.to_vec()));
+
+    tokens
+}
+
 pub struct LibAflByteMutator {
     state: StdState<NopCorpus<BytesInput>, BytesInput, StdRand, NopCorpus<BytesInput>>,
 }
 
 impl LibAflByteMutator {
     pub fn new() -> Self {
-        let state = StdState::new(
+        let mut state = StdState::new(
             StdRand::new(),
             NopCorpus::<BytesInput>::new(),
             NopCorpus::new(),
@@ -302,6 +374,9 @@ impl LibAflByteMutator {
             &mut (),
         )
         .unwrap();
+
+        // Make a Bitcoin Script dictionary available to the token mutators below.
+        state.add_metadata(bitcoin_script_dictionary());
 
         Self { state }
     }
@@ -311,7 +386,7 @@ impl fuzzamoto_ir::OperationByteMutator for LibAflByteMutator {
     fn mutate_bytes(&mut self, bytes: &mut Vec<u8>) {
         let mut input = BytesInput::from(bytes.clone());
 
-        let mut mutator = HavocScheduledMutator::new(havoc_mutations());
+        let mut mutator = HavocScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
         let _ = mutator.mutate(&mut self.state, &mut input);
 
         bytes.clear();
