@@ -191,6 +191,11 @@ enum SigningRequest {
         private_key_var: usize,
         sighash_var: usize,
     },
+    BareMulti {
+        required: u8,
+        private_keys: Vec<[u8; 32]>,
+        sighash_var: usize,
+    },
     Taproot {
         spend_info_var: Option<usize>,
         selected_leaf: Option<TaprootLeaf>,
@@ -424,6 +429,7 @@ impl Compiler {
                 | Operation::BuildPayToPubKey
                 | Operation::BuildPayToPubKeyHash
                 | Operation::BuildPayToWitnessPubKeyHash
+                | Operation::BuildPayToBareMulti { .. }
                 | Operation::BuildPayToTaproot => {
                     self.handle_script_building_operations(instruction)?;
                 }
@@ -1052,6 +1058,49 @@ impl Compiler {
                     script_sig: vec![],
                     witness,
                     requires_signing: None,
+                });
+            }
+            Operation::BuildPayToBareMulti {
+                required,
+                private_keys,
+            } => {
+                let _sighash_flags_var = self.get_input::<u8>(&instruction.inputs, 0)?;
+                let sighash_var = instruction
+                    .inputs
+                    .first()
+                    .copied()
+                    .ok_or(CompilerError::IncorrectNumberOfInputs)?;
+                let n = u8::try_from(private_keys.len()).map_err(|_| {
+                    CompilerError::MiscError("too many keys in bare multisig".to_string())
+                })?;
+                if n == 0 {
+                    return Err(CompilerError::MiscError(
+                        "bare multisig requires at least one private key".to_string(),
+                    ));
+                }
+                let required_clamped = (*required).min(n).max(1);
+
+                let mut spk_builder = ScriptBuf::builder().push_int(i64::from(required_clamped));
+                for sk_bytes in private_keys {
+                    let pk = PrivateKey::from_slice(sk_bytes, NetworkKind::Main).map_err(|_| {
+                        CompilerError::MiscError("invalid bare multisig private key".to_string())
+                    })?;
+                    spk_builder = spk_builder.push_key(&pk.public_key(&self.secp_ctx));
+                }
+                let script_pubkey = spk_builder
+                    .push_int(i64::from(n))
+                    .push_opcode(bitcoin::opcodes::all::OP_CHECKMULTISIG)
+                    .into_script();
+
+                self.append_variable(Scripts {
+                    script_pubkey: script_pubkey.into(),
+                    script_sig: vec![],
+                    witness: Witness { stack: Vec::new() },
+                    requires_signing: Some(SigningRequest::BareMulti {
+                        required: required_clamped,
+                        private_keys: private_keys.clone(),
+                        sighash_var,
+                    }),
                 });
             }
             Operation::BuildPayToScriptHash => {
@@ -2198,6 +2247,43 @@ impl Compiler {
                             _ => {}
                         }
                     }
+                    SigningRequest::BareMulti {
+                        required,
+                        private_keys,
+                        sighash_var,
+                    } => {
+                        let sighash_flag = *self.get_variable::<u8>(*sighash_var).unwrap();
+                        let sighash_type =
+                            EcdsaSighashType::from_consensus(u32::from(sighash_flag));
+
+                        // scriptPubKey is already on the txo; use it for signing
+                        let script_code = Script::from_bytes(&txo_var.scripts.script_pubkey);
+
+                        // Collect `required` signatures (first `required` keys)
+                        let mut sig_script_builder =
+                            ScriptBuf::builder().push_opcode(bitcoin::opcodes::OP_0);
+
+                        for sk_bytes in private_keys.iter().take(*required as usize) {
+                            if let Ok(hash) = cache.legacy_signature_hash(
+                                idx,
+                                script_code,
+                                u32::from(sighash_flag),
+                            ) {
+                                let signature = ecdsa::Signature {
+                                    signature: self.secp_ctx.sign_ecdsa(
+                                        &secp256k1::Message::from_digest(*hash.as_byte_array()),
+                                        &SecretKey::from_slice(sk_bytes.as_slice()).unwrap(),
+                                    ),
+                                    sighash_type,
+                                };
+                                sig_script_builder = sig_script_builder.push_slice(
+                                    PushBytesBuf::try_from(signature.to_vec()).unwrap(),
+                                );
+                            }
+                        }
+
+                        tx_var.tx.input[idx].script_sig = sig_script_builder.into_script();
+                    }
                     SigningRequest::Taproot {
                         spend_info_var,
                         selected_leaf,
@@ -2331,7 +2417,8 @@ impl Compiler {
 mod tests {
     use super::*;
     use crate::{
-        IndexedVariable, Operation, Program, ProgramBuilder, ProgramContext, TaprootLeafSpec,
+        IndexedVariable, Instruction, Operation, Program, ProgramBuilder, ProgramContext,
+        TaprootLeafSpec,
     };
     use bitcoin::{
         Transaction, consensus::Decodable, opcodes::all::OP_PUSHNUM_1, taproot::LeafVersion,
@@ -2634,6 +2721,56 @@ mod tests {
         let control_block = &child_tx.input[0].witness[2];
         assert_eq!(control_block.len(), 33 + 32);
         assert_eq!(&control_block[33..], &HIDDEN_HASH);
+    }
+
+    #[test]
+    fn compile_bare_multisig_without_sighash_input_returns_error() {
+        let program = Program::unchecked_new(
+            test_context(),
+            vec![Instruction {
+                inputs: vec![],
+                operation: Operation::BuildPayToBareMulti {
+                    required: 1,
+                    private_keys: vec![[1u8; 32]],
+                },
+            }],
+        );
+
+        let mut compiler = Compiler::new();
+        let err = compiler
+            .compile(&program)
+            .expect_err("expected compile error");
+        assert!(matches!(err, CompilerError::IncorrectNumberOfInputs));
+    }
+
+    #[test]
+    fn compile_bare_multisig_without_private_keys_returns_error() {
+        let program = Program::unchecked_new(
+            test_context(),
+            vec![
+                Instruction {
+                    inputs: vec![],
+                    operation: Operation::LoadSigHashFlags(0),
+                },
+                Instruction {
+                    inputs: vec![0],
+                    operation: Operation::BuildPayToBareMulti {
+                        required: 1,
+                        private_keys: vec![],
+                    },
+                },
+            ],
+        );
+
+        let mut compiler = Compiler::new();
+        let err = compiler
+            .compile(&program)
+            .expect_err("expected compile error");
+        assert!(matches!(
+            err,
+            CompilerError::MiscError(ref msg)
+            if msg == "bare multisig requires at least one private key"
+        ));
     }
 
     fn build_annex_program(annex: Vec<u8>) -> Program {
