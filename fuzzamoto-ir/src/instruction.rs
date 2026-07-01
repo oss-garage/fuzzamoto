@@ -166,6 +166,7 @@ impl Instruction {
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }
+            | Operation::IncrementalSnapshot
             | Operation::BeginBuildTx
             | Operation::EndBuildTx
             | Operation::BeginBuildTxInputs

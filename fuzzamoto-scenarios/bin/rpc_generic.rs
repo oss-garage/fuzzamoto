@@ -1,5 +1,6 @@
 use fuzzamoto::{
     fuzzamoto_main,
+    runners::Runner,
     scenarios::{Scenario, ScenarioInput, ScenarioResult},
     targets::{BitcoinCoreTarget, TargetNode},
 };
@@ -209,7 +210,7 @@ impl Scenario<'_, TestCase> for RpcScenario {
         })
     }
 
-    fn run(&mut self, input: TestCase) -> ScenarioResult {
+    fn run(&mut self, input: TestCase, _runner: &dyn Runner) -> ScenarioResult {
         if self.available_rpcs.is_empty() {
             return ScenarioResult::Fail("File with the RPC commands is empty".to_string());
         }

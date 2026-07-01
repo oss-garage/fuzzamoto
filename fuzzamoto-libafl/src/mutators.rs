@@ -74,11 +74,15 @@ where
             None
         };
 
+        let min_index = input.frozen_prefix_len.unwrap_or(0);
+
         Ok(
-            match self
-                .mutator
-                .mutate(input.ir_mut(), &mut self.rng, tc_data.as_deref())
-            {
+            match self.mutator.mutate_from(
+                input.ir_mut(),
+                &mut self.rng,
+                tc_data.as_deref(),
+                min_index,
+            ) {
                 Ok(()) => MutationResult::Mutated,
                 _ => MutationResult::Skipped,
             },
@@ -148,10 +152,12 @@ where
 
         let other = other_testcase.load_input(state.corpus())?;
 
+        let min_index = input.frozen_prefix_len.unwrap_or(0);
+
         let mut input_clone = input.clone();
         if self
             .mutator
-            .splice(input_clone.ir_mut(), other.ir(), &mut self.rng)
+            .splice_from(input_clone.ir_mut(), other.ir(), &mut self.rng, min_index)
             .is_err()
         {
             return Ok(MutationResult::Skipped);
@@ -230,6 +236,12 @@ where
         else {
             return Ok(MutationResult::Skipped);
         };
+
+        let min_index = input.frozen_prefix_len.unwrap_or(0);
+
+        if index < min_index {
+            return Ok(MutationResult::Skipped);
+        }
 
         let mut builder = fuzzamoto_ir::ProgramBuilder::new(input.ir().context.clone());
 

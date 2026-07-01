@@ -1,6 +1,7 @@
 use fuzzamoto::{
     connections::Transport,
     fuzzamoto_main,
+    runners::Runner,
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
     targets::{BitcoinCoreTarget, Target},
     test_utils,
@@ -213,7 +214,7 @@ impl<TX: Transport, T: Target<TX>> Scenario<'_, TestCase> for CompactBlocksScena
         })
     }
 
-    fn run(&mut self, testcase: TestCase) -> ScenarioResult {
+    fn run(&mut self, testcase: TestCase, _runner: &dyn Runner) -> ScenarioResult {
         let mut prevs: Vec<(u32, BlockHash, bitcoin::OutPoint)> = self
             .inner
             .block_tree

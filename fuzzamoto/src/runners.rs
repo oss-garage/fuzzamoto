@@ -5,9 +5,13 @@ use fuzzamoto_nyx_sys::*;
 /// libafl-qemu, local system, etc.)
 pub trait Runner {
     // Initialize the runner
-    fn new() -> Self;
+    fn new() -> Self
+    where
+        Self: Sized;
     // Get the next fuzz input
     fn get_fuzz_input(&self) -> Vec<u8>;
+    // Create an incremental snapshot, return the payload, and save the snapshot prefix
+    fn create_incremental_and_next(&self, prefix_index: usize) -> (Vec<u8>, usize);
     // Fail the last test case
     fn fail(&self, message: &str);
     // Skip the last test case
@@ -37,6 +41,10 @@ impl Runner for LocalRunner {
         }
     }
 
+    fn create_incremental_and_next(&self, _prefix_index: usize) -> (Vec<u8>, usize) {
+        (vec![], 0)
+    }
+
     fn fail(&self, message: &str) {
         log::error!("{message}");
     }
@@ -64,6 +72,14 @@ impl Runner for NyxRunner {
         let len = unsafe { nyx_get_fuzz_input(data.as_mut_ptr(), data.len()) };
         data.truncate(len);
         data
+    }
+
+    fn create_incremental_and_next(&self, prefix_index: usize) -> (Vec<u8>, usize) {
+        let mut data = vec![0u8; self.max_input_size];
+        let mut pos = prefix_index;
+        let len = unsafe { nyx_create_incremental_and_next(data.as_mut_ptr(), &mut pos) };
+        data.truncate(len);
+        (data, pos)
     }
 
     fn fail(&self, message: &str) {
@@ -109,6 +125,10 @@ impl Runner for StdRunner {
 
     fn get_fuzz_input(&self) -> Vec<u8> {
         self.runner.get_fuzz_input()
+    }
+
+    fn create_incremental_and_next(&self, prefix_index: usize) -> (Vec<u8>, usize) {
+        self.runner.create_incremental_and_next(prefix_index)
     }
 
     fn fail(&self, message: &str) {

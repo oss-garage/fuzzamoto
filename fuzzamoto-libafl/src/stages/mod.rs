@@ -13,6 +13,9 @@ pub mod verify_timeouts;
 
 pub use verify_timeouts::*;
 
+pub mod incremental_snapshot_stage;
+pub use incremental_snapshot_stage::*;
+
 use std::{borrow::Borrow, cell::RefCell, marker::PhantomData};
 
 use fuzzamoto_ir::Minimizer;

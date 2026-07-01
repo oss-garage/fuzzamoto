@@ -38,6 +38,8 @@ __attribute__((weak)) extern uint32_t __afl_map_size;
 static uint8_t *trace_buffer = NULL;
 static size_t trace_buffer_size = 0;
 
+static kAFL_payload *payload_buffer = NULL;
+
 /** Initiliaze the nyx agent and return the maximum size for generated fuzz
  * inputs.
  *
@@ -181,8 +183,8 @@ void nyx_println(const char *message, size_t message_len) {
  *
  * Note: This will take the snapshot on the first call. */
 size_t nyx_get_fuzz_input(const uint8_t *data, size_t max_size) {
-  kAFL_payload *payload_buffer = mmap(NULL, max_size, PROT_READ | PROT_WRITE,
-                                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  payload_buffer = mmap(NULL, max_size, PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_ANONYMOUS, -1, 0);
   mlock(payload_buffer, max_size);
   memset(payload_buffer, 0, max_size);
 
@@ -209,6 +211,28 @@ size_t nyx_get_fuzz_input(const uint8_t *data, size_t max_size) {
 
   // Copy payload buffer into data
   memcpy((void *)data, payload_buffer->data, payload_buffer->size);
+
+  return payload_buffer->size;
+}
+
+/** Create an incremental snapshot, fetch the payload, and save the snapshot
+ *  prefix for later restores.
+ */
+size_t nyx_create_incremental_and_next(const uint8_t *data, size_t *prefix_index) {
+  static size_t saved_prefix_index = 0;
+
+  // Save the prefix index before taking the snapshot
+  saved_prefix_index = *prefix_index;
+
+  // Create the incremental snapshot which also captures saved_prefix_index
+  kAFL_hypercall(HYPERCALL_KAFL_CREATE_TMP_SNAPSHOT, 0);
+  kAFL_hypercall(HYPERCALL_KAFL_NEXT_PAYLOAD, 0);
+  kAFL_hypercall(HYPERCALL_KAFL_ACQUIRE, 0);
+
+  memcpy((void *)data, payload_buffer->data, payload_buffer->size);
+
+  // Update the prefix for the caller
+  *prefix_index = saved_prefix_index;
 
   return payload_buffer->size;
 }

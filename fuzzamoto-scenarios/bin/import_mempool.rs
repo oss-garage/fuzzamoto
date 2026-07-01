@@ -1,6 +1,7 @@
 use fuzzamoto::{
     connections::Transport,
     fuzzamoto_main,
+    runners::Runner,
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
     targets::{BitcoinCoreTarget, TargetNode},
 };
@@ -48,7 +49,7 @@ where
         })
     }
 
-    fn run(&mut self, input: MempoolDotDatBytes) -> ScenarioResult {
+    fn run(&mut self, input: MempoolDotDatBytes, _runner: &dyn Runner) -> ScenarioResult {
         if let Ok(mut mempool_file) = std::fs::File::create(&self.mempool_path) {
             let _ = mempool_file.write_all(input.0);
             let _ = mempool_file.flush();

@@ -66,6 +66,8 @@ pub enum CompiledAction {
     /// Set mock time for all nodes in the test
     SetTime(u64),
     Probe,
+    /// Take an incremental snapshot
+    IncrementalSnapshot,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -408,6 +410,12 @@ impl Compiler {
                 | Operation::AddAddr
                 | Operation::AddAddrV2 => {
                     self.handle_addr_operations(instruction)?;
+                }
+
+                Operation::IncrementalSnapshot => {
+                    self.output
+                        .actions
+                        .push(CompiledAction::IncrementalSnapshot);
                 }
 
                 Operation::BeginWitnessStack

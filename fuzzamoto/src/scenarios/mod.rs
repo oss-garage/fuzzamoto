@@ -1,3 +1,5 @@
+use crate::runners::Runner;
+
 pub mod generic;
 
 /// `ScenarioInput` is a trait for scenario input types
@@ -24,7 +26,7 @@ where
     /// Create a new instance of the scenario, preparing the initial state of the test
     fn new(args: &[String]) -> Result<Self, String>;
     // Run the test
-    fn run(&mut self, testcase: I) -> ScenarioResult;
+    fn run(&mut self, testcase: I, runner: &dyn Runner) -> ScenarioResult;
 }
 
 #[macro_export]
@@ -85,7 +87,7 @@ macro_rules! fuzzamoto_main {
                 return ExitCode::SUCCESS;
             };
 
-            match scenario.run(testcase) {
+            match scenario.run(testcase, &runner) {
                 ScenarioResult::Ok => {}
                 ScenarioResult::Skip => {
                     // TODO drop(target);

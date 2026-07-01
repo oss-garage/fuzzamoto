@@ -208,6 +208,9 @@ pub enum Operation {
         /// None = key-path only spend; Some = script-path with one spendable leaf
         script_leaf: Option<TaprootLeafSpec>,
     },
+
+    /// Snapshot creation
+    IncrementalSnapshot,
     // TODO: SendGetBlockTxn
     // TODO: SendGetBlocks
     // TODO: SendGetHeaders
@@ -443,6 +446,8 @@ impl fmt::Display for Operation {
                 }
                 write!(f, ")")
             }
+
+            Operation::IncrementalSnapshot => write!(f, "IncrementalSnapshot"),
         }
     }
 }
@@ -575,7 +580,8 @@ impl Operation {
             | Operation::Probe
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
-            | Operation::BuildTaprootTree { .. } => false,
+            | Operation::BuildTaprootTree { .. }
+            | Operation::IncrementalSnapshot => false,
         }
     }
 
@@ -741,7 +747,8 @@ impl Operation {
             | Operation::BuildCoinbaseTxInput
             | Operation::AddCoinbaseTxOutput
             | Operation::SendBlockTxn
-            | Operation::Probe => false,
+            | Operation::Probe
+            | Operation::IncrementalSnapshot => false,
         }
     }
 
@@ -917,6 +924,8 @@ impl Operation {
             Operation::SendCompactBlock => vec![],
             Operation::SendBlockTxn => vec![],
             Operation::Probe => vec![],
+
+            Operation::IncrementalSnapshot => vec![],
         }
     }
 
@@ -1107,7 +1116,8 @@ impl Operation {
             | Operation::BeginWitnessStack
             | Operation::BeginPrefillTransactions
             | Operation::BuildPayToAnchor
-            | Operation::Probe => vec![],
+            | Operation::Probe
+            | Operation::IncrementalSnapshot => vec![],
         }
     }
 
@@ -1231,7 +1241,8 @@ impl Operation {
             | Operation::EndBuildBlockTxn
             | Operation::AddTxToBlockTxn
             | Operation::SendBlockTxn
-            | Operation::Probe => vec![],
+            | Operation::Probe
+            | Operation::IncrementalSnapshot => vec![],
         }
     }
 }

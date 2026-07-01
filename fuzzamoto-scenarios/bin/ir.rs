@@ -11,6 +11,7 @@ use fuzzamoto::{
     connections::Transport,
     fuzzamoto_main,
     oracles::{CrashOracle, Oracle, OracleResult},
+    runners::Runner,
     scenarios::{Scenario, ScenarioInput, ScenarioResult, generic::GenericScenario},
     targets::{
         BitcoinCoreTarget, ConnectableTarget, GenerateToAddress, HasBlockChainInterface, Target,
@@ -276,10 +277,15 @@ where
         Ok(())
     }
 
-    fn process_actions(&mut self, mut program: CompiledProgram) {
+    fn process_actions(
+        &mut self,
+        program: CompiledProgram,
+        start_index: usize,
+        runner: &dyn Runner,
+    ) -> Option<(Vec<u8>, usize)> {
         let message_filter = |(s, _): &(String, Vec<u8>)| ["getblocktxn"].contains(&s.as_str());
         let mut non_probe_action_count = 0;
-        for action in program.actions.drain(..) {
+        for (i, action) in program.actions.into_iter().enumerate().skip(start_index) {
             match action {
                 CompiledAction::Connect(_node, connection_type) => {
                     let conn_type = match connection_type.as_str() {
@@ -338,7 +344,7 @@ where
                 }
                 CompiledAction::SendRawMessage(from, command, message) => {
                     if self.inner.connections.is_empty() {
-                        return;
+                        return None;
                     }
 
                     let num_connections = self.inner.connections.len();
@@ -379,8 +385,17 @@ where
 
                     self.futurest = std::cmp::max(self.futurest, time);
                 }
+                CompiledAction::IncrementalSnapshot => {
+                    // If we're creating a new incremental snapshot, we want to save the index to skip
+                    // ahead to.
+                    let prefix_index = i + 1;
+                    let (new_payload, action_pos) =
+                        runner.create_incremental_and_next(prefix_index);
+                    return Some((new_payload, action_pos));
+                }
             }
         }
+        None
     }
 
     fn print_received(&mut self) {
@@ -554,9 +569,30 @@ where
         })
     }
 
-    fn run(&mut self, testcase: TestCase) -> ScenarioResult {
+    fn run(&mut self, testcase: TestCase, runner: &dyn Runner) -> ScenarioResult {
         let metadata = testcase.program.metadata.clone();
-        self.process_actions(testcase.program);
+        let mut program = testcase.program;
+        let mut start_index = 0;
+
+        while let Some((new_payload, action_pos)) =
+            self.process_actions(program, start_index, runner)
+        {
+            let new_testcase = match TestCase::decode(&new_payload) {
+                Ok(tc) => tc,
+                Err(e) => {
+                    log::warn!(
+                        "Failed to decode new payload after creating incremental snapshot: {e}",
+                    );
+                    runner.skip();
+                    return ScenarioResult::Skip;
+                }
+            };
+
+            // Resume just after the snapshot prefix.
+            program = new_testcase.program;
+            start_index = action_pos;
+        }
+
         self.ping_connections();
 
         if self.recording_received_messages

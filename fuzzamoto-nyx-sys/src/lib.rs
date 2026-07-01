@@ -12,6 +12,10 @@ unsafe extern "C" {
         len: usize,
     );
     pub fn nyx_get_fuzz_input(data: *const c_uchar, max_size: usize) -> usize;
+    pub fn nyx_create_incremental_and_next(
+        data: *mut c_uchar,
+        resume_position: *mut usize,
+    ) -> usize;
     pub fn nyx_skip();
     pub fn nyx_release();
     pub fn nyx_fail(message: *const c_char);
