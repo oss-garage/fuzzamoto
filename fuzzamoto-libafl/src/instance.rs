@@ -46,7 +46,7 @@ use rand::{SeedableRng, rngs::SmallRng};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    feedbacks::{CaptureTimeoutFeedback, CrashCauseFeedback},
+    feedbacks::{CaptureTimeoutFeedback, CrashCauseFeedback, assertions::AssertionFeedback},
     input::IrInput,
     mutators::{IrGenerator, IrMutator, IrSpliceMutator, LibAflByteMutator},
     options::FuzzerOptions,
@@ -164,6 +164,10 @@ where
 
         let map_observer_handle = trace_observer.handle();
         let stdout_observer_handle = stdout_observer.handle();
+        let assertion_feedback_enabled = self
+            .options
+            .assertion_feedback_enabled(self.client_description.core_id());
+        let coverage_feedback_enabled = !assertion_feedback_enabled;
 
         // Feedback to rate the interestingness of an input
         let mut feedback = feedback_or!(
@@ -173,7 +177,23 @@ where
                 ConstFeedback::new(!self.options.static_corpus),
                 // Disable coverage feedback if we're minimizing an input
                 ConstFeedback::new(self.options.minimize_input.is_none()),
-                map_feedback
+                // Assertion-focused instances use assertion feedback instead of
+                // coverage feedback for corpus admission.
+                ConstFeedback::new(coverage_feedback_enabled),
+                map_feedback,
+            ),
+            feedback_and_fast!(
+                // Disable assertion feedback if the corpus is static
+                ConstFeedback::new(!self.options.static_corpus),
+                // Disable assertion feedback if we're minimizing an input
+                ConstFeedback::new(self.options.minimize_input.is_none()),
+                AssertionFeedback::new(
+                    &stdout_observer,
+                    self.options
+                        .output_dir(self.client_description.core_id())
+                        .join("assertions.txt"),
+                    assertion_feedback_enabled,
+                ),
             ),
             // Time feedback
             TimeFeedback::new(&time_observer),
@@ -206,7 +226,9 @@ where
                 feedback_and!(
                     ConstFeedback::new(!self.options.ignore_hangs),
                     capture_timeout_feedback,
-                )
+                ),
+                // Always assertions failing are considered a bug.
+                AssertionFeedback::new_only_always(&stdout_observer, assertion_feedback_enabled),
             ),
             // Only store objective if it triggers new coverage (compared to other solutions)
             MaxMapFeedback::with_name("mapfeedback_metadata_objective", &trace_observer)
@@ -260,7 +282,9 @@ where
         if let Some(rerun_input) = &self.options.rerun_input {
             let input = IrInput::unparse(rerun_input);
 
-            let mut executor = NyxExecutor::builder().build(helper, observers);
+            let mut executor = NyxExecutor::builder()
+                .stdout(stdout_observer_handle)
+                .build(helper, observers);
 
             let exit_kind = executor
                 .run_target(
@@ -459,18 +483,21 @@ where
                     }),
                     IrMinimizerStage::<CuttingMinimizer, _, _>::new(
                         trace_handle.clone(),
+                        stdout_observer_handle.clone(),
                         200,
                         minimizing_crash,
                         &continue_minimizing
                     ),
                     IrMinimizerStage::<InstrBlockMinimizer, _, _>::new(
                         trace_handle.clone(),
+                        stdout_observer_handle.clone(),
                         200,
                         minimizing_crash,
                         &continue_minimizing
                     ),
                     IrMinimizerStage::<NoppingMinimizer, _, _>::new(
                         trace_handle.clone(),
+                        stdout_observer_handle.clone(),
                         200,
                         minimizing_crash,
                         &continue_minimizing
