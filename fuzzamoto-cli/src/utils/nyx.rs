@@ -43,15 +43,26 @@ pub fn generate_nyx_config(nyx_path: &Path, sharedir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(Copy, Clone)]
+pub struct NyxScriptConfig<'a> {
+    pub secondary_bitcoind: Option<&'a str>,
+    pub rpc_path: Option<&'a str>,
+    pub seedprogram: Option<&'a str>,
+}
+
 pub fn create_nyx_script(
     sharedir: &Path,
     all_deps: &[String],
     binary_names: &[String],
     crash_handler_name: &str,
     scenario_name: &str,
-    secondary_bitcoind: Option<&str>,
-    rpc_path: Option<&str>,
+    config: NyxScriptConfig<'_>,
 ) -> Result<()> {
+    let NyxScriptConfig {
+        secondary_bitcoind,
+        rpc_path,
+        seedprogram,
+    } = config;
     let mut script = vec![
         "chmod +x hget".to_string(),
         "cp hget /tmp".to_string(),
@@ -69,6 +80,10 @@ pub fn create_nyx_script(
 
     if let Some(rpc_path) = rpc_path {
         script.push(format!("./hget {rpc_path} {rpc_path}"));
+    }
+
+    if let Some(seed) = seedprogram {
+        script.push(format!("./hget {seed} {seed}"));
     }
 
     // Make executables
@@ -134,11 +149,15 @@ pub fn create_nyx_script(
     };
 
     // Run the scenario
+    let seedprogram_arg = seedprogram
+        .map(|s| format!("--seedprogram /tmp/{s}"))
+        .unwrap_or_default();
     script.push(format!(
-        "RUST_LOG=debug LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 ./{} ./bitcoind_proxy {} {} > log.txt 2>&1",
+        "RUST_LOG=debug LD_LIBRARY_PATH=/tmp LD_BIND_NOW=1 ./{} ./bitcoind_proxy {} {} {} > log.txt 2>&1",
         scenario_name,
         rpc_path.unwrap_or(""),
         secondary_arg,
+        seedprogram_arg,
     ));
 
     // Debug info
