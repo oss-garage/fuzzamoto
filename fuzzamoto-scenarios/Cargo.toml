@@ -11,6 +11,7 @@ fuzz = ["compile_in_vm", "force_send_and_ping", "nyx"]
 reproduce = ["compile_in_vm", "force_send_and_ping", "fuzzamoto/reproduce"]
 coverage = ["fuzzamoto/coverage"]
 nyx_log = ["nyx"]
+erlay = ["fuzzamoto/erlay", "fuzzamoto-ir/erlay"]
 
 nyx = ["dep:fuzzamoto-nyx-sys"]
 compile_in_vm = []

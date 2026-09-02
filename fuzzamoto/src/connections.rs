@@ -8,6 +8,7 @@ use std::net;
 pub enum ConnectionType {
     Inbound,
     Outbound,
+    OutboundReconciliation,
 }
 
 pub trait Transport {
@@ -396,7 +397,7 @@ impl<T: Transport> Connection<T> {
         version_message.version = 70016; // wtxidrelay version
         version_message.relay = opts.relay;
 
-        if self.connection_type == ConnectionType::Outbound {
+        if self.connection_type != ConnectionType::Inbound {
             loop {
                 let received = self.transport.receive()?;
                 if received.0 == "version" {

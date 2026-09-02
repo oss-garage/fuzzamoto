@@ -285,6 +285,9 @@ where
                     let conn_type = match connection_type.as_str() {
                         "inbound" => fuzzamoto::connections::ConnectionType::Inbound,
                         "outbound" => fuzzamoto::connections::ConnectionType::Outbound,
+                        "outbound-full-recon" => {
+                            fuzzamoto::connections::ConnectionType::OutboundReconciliation
+                        }
                         _ => continue,
                     };
 
@@ -307,6 +310,9 @@ where
                     let conn_type = match connection_type.as_str() {
                         "inbound" => fuzzamoto::connections::ConnectionType::Inbound,
                         "outbound" => fuzzamoto::connections::ConnectionType::Outbound,
+                        "outbound-full-recon" => {
+                            fuzzamoto::connections::ConnectionType::OutboundReconciliation
+                        }
                         _ => continue,
                     };
 

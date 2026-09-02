@@ -9,6 +9,7 @@ repository.workspace = true
 [features]
 fuzz = ["reduced_pow"]
 reproduce = ["reduced_pow"]
+erlay = ["fuzzamoto/erlay"]
 
 reduced_pow = []
 

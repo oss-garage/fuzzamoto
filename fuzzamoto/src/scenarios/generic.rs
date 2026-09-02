@@ -87,7 +87,11 @@ impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
                 false,
             ),
             (
-                target.connect(ConnectionType::Outbound)?,
+                target.connect(if cfg!(feature = "erlay") {
+                    ConnectionType::OutboundReconciliation
+                } else {
+                    ConnectionType::Outbound
+                })?,
                 true,
                 true,
                 false,
@@ -281,7 +285,7 @@ impl Encodable for Action {
                     ConnectionType::Inbound => {
                         false.consensus_encode(s)?;
                     }
-                    ConnectionType::Outbound => {
+                    ConnectionType::Outbound | ConnectionType::OutboundReconciliation => {
                         true.consensus_encode(s)?;
                     }
                 }
