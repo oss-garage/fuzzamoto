@@ -11,6 +11,7 @@ workspace = true
 
 [features]
 nyx_log = []
+erlay = ["fuzzamoto/erlay", "fuzzamoto-ir/erlay"]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive", "string"] }

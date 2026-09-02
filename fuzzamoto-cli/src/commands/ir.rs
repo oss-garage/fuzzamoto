@@ -5,8 +5,9 @@ use fuzzamoto_ir::compiler::Compiler;
 use fuzzamoto_ir::{
     AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator,
     BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator, BloomFilterLoadGenerator,
-    CompactFilterQueryGenerator, FullProgramContext, Generator, GetAddrGenerator, GetDataGenerator,
-    HeaderGenerator, InstructionContext, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
+    CompactFilterQueryGenerator, ErlayExpensiveSketchGenerator, ErlayMessageGenerator,
+    FullProgramContext, Generator, GetAddrGenerator, GetDataGenerator, HeaderGenerator,
+    InstructionContext, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
     NonStandardSpendGenerator, OneParentOneChildGenerator, Program, ProgramBuilder,
     SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
 };
@@ -206,7 +207,13 @@ fn all_generators(context: &FullProgramContext) -> Vec<Box<dyn Generator<ThreadR
         Box::new(InventoryGenerator),
         Box::new(SendBlockGenerator),
         Box::new(AddTxToBlockGenerator),
-        Box::new(SendMessageGenerator::default()),
+        Box::new(if cfg!(feature = "erlay") {
+            SendMessageGenerator::default_with_erlay()
+        } else {
+            SendMessageGenerator::default()
+        }),
+        Box::new(ErlayMessageGenerator),
+        Box::new(ErlayExpensiveSketchGenerator),
         Box::new(WitnessGenerator::new()),
         Box::new(SingleTxGenerator),
         Box::new(OneParentOneChildGenerator),

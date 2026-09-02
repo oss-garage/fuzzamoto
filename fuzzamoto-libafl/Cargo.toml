@@ -12,6 +12,7 @@ std = []
 
 fuzz = ["compile_in_vm"]
 reproduce = ["compile_in_vm"]
+erlay = ["fuzzamoto/erlay", "fuzzamoto-ir/erlay"]
 
 ## Build with a simple event manager instead of Launcher - don't fork, and crash after the first bug.
 simplemgr = []
