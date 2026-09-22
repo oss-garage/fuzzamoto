@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <inttypes.h>
@@ -148,6 +149,9 @@ void nyx_dump_file_to_host(const char *file_name, size_t file_name_len,
   kAFL_hypercall(HYPERCALL_KAFL_DUMP_FILE, (uintptr_t)(&file_obj));
 }
 
+/* Write one logical stdout line through Nyx hprintf. LibAFL's StdOutObserver
+ * reads this channel from NyxExecutor, which is how VM-side assertions and
+ * runner messages are returned to the host-side feedback code. */
 void nyx_println(const char *message, size_t message_len) {
   // case 1; our testcase is smaller than the nyx limitation
   if (message_len < HPRINTF_MAX_SIZE) {
