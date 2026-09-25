@@ -1,10 +1,21 @@
 use crate::error::{CliError, Result};
 use crate::utils::{file_ops, nyx, process};
+use clap::ValueEnum;
 use std::path::{Path, PathBuf};
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Sanitizer {
+    #[default]
+    Asan,
+    Tsan,
+    Ubsan,
+    Msan,
+}
 
 pub struct InitCommand;
 
 impl InitCommand {
+    #[allow(clippy::too_many_arguments)]
     pub fn execute(
         sharedir: &Path,
         crash_handler: &Path,
@@ -13,6 +24,9 @@ impl InitCommand {
         scenario: &Path,
         nyx_dir: &Path,
         rpc_path: Option<&PathBuf>,
+        symbolizer_path: Option<&PathBuf>,
+        sanitizer_suppressions: Option<&PathBuf>,
+        sanitizer: Sanitizer,
     ) -> Result<()> {
         file_ops::ensure_sharedir_not_exists(sharedir)?;
         file_ops::create_dir_all(sharedir)?;
@@ -30,6 +44,11 @@ impl InitCommand {
             file_ops::copy_file_to_dir(rpc, sharedir)?;
         }
 
+        if let Some(suppressions) = sanitizer_suppressions {
+            file_ops::ensure_file_exists(suppressions)?;
+            file_ops::copy_file_to_dir(suppressions, sharedir)?;
+        }
+
         let mut all_deps = Vec::new();
         let mut binary_names = Vec::new();
 
@@ -37,6 +56,10 @@ impl InitCommand {
         let mut binaries = vec![bitcoind, scenario];
         if let Some(secondary) = secondary_bitcoind {
             binaries.push(secondary);
+        }
+
+        if let Some(symbolizer) = symbolizer_path {
+            binaries.push(symbolizer);
         }
 
         for binary in &binaries {
@@ -117,6 +140,16 @@ impl InitCommand {
             .and_then(|p| p.file_name())
             .and_then(|name| name.to_str());
 
+        let symbolizer_name = symbolizer_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|name| name.to_str());
+
+        let suppressions_name = sanitizer_suppressions
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|name| name.to_str());
+
         nyx::create_nyx_script(
             sharedir,
             &all_deps,
@@ -125,6 +158,9 @@ impl InitCommand {
             scenario_name,
             secondary_name,
             rpc_name,
+            symbolizer_name,
+            suppressions_name,
+            sanitizer,
         )?;
 
         Ok(())

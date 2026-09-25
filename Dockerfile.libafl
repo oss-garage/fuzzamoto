@@ -3,6 +3,8 @@ FROM debian:bookworm
 # ------ Build and install dependencies ------
 
 ARG LLVM_V=19
+ARG SANITIZER=asan
+ENV SANITIZER=${SANITIZER}
 
 # Add the LLVM apt repo
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg lsb-release software-properties-common wget && \
@@ -23,6 +25,7 @@ RUN apt-get update && apt install -y --no-install-recommends \
   llvm-${LLVM_V} \
   llvm-${LLVM_V}-dev \
   clang-${LLVM_V} \
+  libclang-rt-${LLVM_V}-dev \
   cpio \
   git \
   build-essential \
@@ -53,6 +56,45 @@ ENV LLVM_CONFIG=llvm-config-${LLVM_V}
 RUN git clone https://github.com/AFLplusplus/AFLplusplus
 RUN cd AFLplusplus && make PERFORMANCE=1 -j$(nproc --ignore 1)
 
+ARG LLVM_RELEASE=llvmorg-19.1.7
+RUN set -e; \
+    case "${SANITIZER}" in \
+      asan)  echo 'CORE_SANITIZERS=address' > /san-flags.sh ;; \
+      tsan)  printf '%s\n' \
+              'CORE_SANITIZERS=thread' \
+              'SAN_CFLAGS="-fsanitize=thread"' \
+              'SAN_CXXFLAGS="${SAN_CFLAGS} -nostdinc++ -nostdlib++ -isystem /libcxx_san/include/c++/v1 -L/libcxx_san/lib -Wl,-rpath,/libcxx_san/lib -lc++ -lc++abi -lpthread -Wno-unused-command-line-argument"' \
+              > /san-flags.sh ;; \
+      ubsan) echo 'CORE_SANITIZERS=undefined,integer' > /san-flags.sh ;; \
+      msan)  printf '%s\n' \
+              'CORE_SANITIZERS=memory' \
+              'SAN_CFLAGS="-fsanitize=memory"' \
+              'SAN_CXXFLAGS="${SAN_CFLAGS} -nostdinc++ -nostdlib++ -isystem /libcxx_san/include/c++/v1 -L/libcxx_san/lib -Wl,-rpath,/libcxx_san/lib -lc++ -lc++abi -lpthread -Wno-unused-command-line-argument"' \
+              > /san-flags.sh ;; \
+      *) echo "unknown SANITIZER: ${SANITIZER}" >&2; exit 1 ;; \
+    esac
+
+# Set LIBCXXABI_USE_LLVM_UNWINDER=OFF when instrumenting with MSAN.
+# See: https://github.com/llvm/llvm-project/issues/84348
+RUN if [ "${SANITIZER}" = msan ] || [ "${SANITIZER}" = tsan ]; then set -e; \
+      git clone --depth=1 -b ${LLVM_RELEASE} https://github.com/llvm/llvm-project /llvm-project; \
+      cmake -G Ninja -S /llvm-project/runtimes -B /libcxx_san_build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang-${LLVM_V} \
+        -DCMAKE_CXX_COMPILER=clang++-${LLVM_V} \
+        -DLIBCXXABI_USE_LLVM_UNWINDER=OFF \
+        -DLIBCXX_HARDENING_MODE=debug \
+        -DLIBCXX_INCLUDE_TESTS=OFF \
+        -DLIBCXX_ABI_DEFINES="_LIBCPP_ABI_BOUNDED_ITERATORS;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STD_ARRAY;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STRING;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR;_LIBCPP_ABI_BOUNDED_UNIQUE_PTR" \
+        -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
+        -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi" \
+        -DCMAKE_INSTALL_PREFIX=/libcxx_san \
+        -DLLVM_TARGETS_TO_BUILD=Native \
+        -DLLVM_USE_SANITIZER=$([ "${SANITIZER}" = tsan ] && echo Thread || echo Memory); \
+      ninja -C /libcxx_san_build install; \
+      rm -rf /libcxx_san_build /llvm-project; \
+    fi
+
 # ------ Build Bitcoin Core and the nyx agent ------
 
 # Build Bitcoin Core
@@ -82,9 +124,12 @@ ENV AFL_LLVM_DENYLIST=/denylist.txt
 ENV SOURCES_PATH=/tmp/bitcoin-depends
 RUN make -C bitcoin/depends NO_QT=1 NO_ZMQ=1 NO_USDT=1 download-linux SOURCES_PATH=$SOURCES_PATH
 # Keep extracted source
-RUN sed -i --regexp-extended '/.*rm -rf .*extract_dir.*/d' ./bitcoin/depends/funcs.mk && \
+RUN . /san-flags.sh && set -- && \
+    [ -z "$SAN_CFLAGS" ] || set -- CFLAGS="$SAN_CFLAGS" CXXFLAGS="$SAN_CXXFLAGS"; \
+    sed -i --regexp-extended '/.*rm -rf .*extract_dir.*/d' ./bitcoin/depends/funcs.mk && \
+    if [ "$SANITIZER" = "tsan" ]; then export AFL_LLVM_THREADSAFE_INST=1; fi && \
     make -C ./bitcoin/depends DEBUG=1 NO_QT=1 NO_ZMQ=1 NO_USDT=1 \
-      SOURCES_PATH=$SOURCES_PATH \
+      SOURCES_PATH=$SOURCES_PATH "$@" \
       AR=llvm-ar-${LLVM_V} NM=llvm-nm-${LLVM_V} RANLIB=llvm-ranlib-${LLVM_V} STRIP=llvm-strip-${LLVM_V} \
       -j$(nproc)
 
@@ -92,13 +137,15 @@ COPY ./target-patches/bitcoin-core-aggressive-rng.patch bitcoin/
 RUN cd bitcoin/ && \
       git apply bitcoin-core-aggressive-rng.patch
 
-RUN cd bitcoin/ && cmake -B build_fuzz \
+RUN . /san-flags.sh && set -- && \
+    [ -z "$SAN_CFLAGS" ] || set -- -DCMAKE_C_FLAGS="$SAN_CFLAGS" -DCMAKE_CXX_FLAGS="$SAN_CXXFLAGS"; \
+    cd bitcoin/ && cmake -B build_fuzz \
       --toolchain ./depends/$(./depends/config.guess)/toolchain.cmake \
-      -DSANITIZERS="address" \
-      -DAPPEND_CPPFLAGS="-DFUZZAMOTO_FUZZING -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -DABORT_ON_FAILED_ASSUME" \
+      -DSANITIZERS="$CORE_SANITIZERS" "$@" \
+      -DAPPEND_CPPFLAGS="-DFUZZAMOTO_FUZZING -DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION -DABORT_ON_FAILED_ASSUME -U_FORTIFY_SOURCE" \
       -DAPPEND_LDFLAGS="-fuse-ld=lld-${LLVM_V}"
 
-RUN cmake --build bitcoin/build_fuzz -j$(nproc) --target bitcoind
+RUN if [ "$SANITIZER" = "tsan" ]; then export AFL_LLVM_THREADSAFE_INST=1; fi && cmake --build bitcoin/build_fuzz -j$(nproc) --target bitcoind
 
 ENV CC=clang-${LLVM_V}
 ENV CXX=clang++-${LLVM_V}

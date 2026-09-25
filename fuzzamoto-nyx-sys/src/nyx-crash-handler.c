@@ -11,13 +11,12 @@
 ///   compiling with sanitizers (e.g. ASan), as they provide their own signal
 ///   handlers.
 /// - -DENABLE_NYX: Use nyx hypercalls to let nyx know that a crash has occured.
-/// - -DASAN_LOG_PATH=<path>: Path to the ASan log file.
 /// - -DCUSTOM_BACKTRACE: Enable custom backtrace.
 ///
 /// Example instructions for compiling the crash handler for use with an ASan
 /// compiled target:
 /// ```
-/// gcc -DENABLE_NYX -DASAN_LOG_PATH=/tmp/asan.log -o nyx-crash-handler.so
+/// gcc -DENABLE_NYX -o nyx-crash-handler.so
 /// -shared -fPIC nyx-crash-handler.c
 /// ```
 
@@ -34,7 +33,7 @@
 #include "nyx.h"
 #endif
 
-#define ASAN_LOG_PATH "/tmp/asan.log"
+#define SAN_LOG_PATH "/tmp/san.log"
 #define MAX_CUSTOM_BACKTRACE_SIZE 50
 
 static char *log = NULL;
@@ -58,10 +57,10 @@ void append_log(const char *msg) {
   strcat(log, msg);
 }
 
-// Fetch the ASan log from the log file and append it to the global log
-void append_asan_log() {
+// Fetch the sanitizer log from the log file and append it to the global log
+void append_san_log() {
   char *log_file_path = NULL;
-  asprintf(&log_file_path, "%s.%d", ASAN_LOG_PATH, getpid());
+  asprintf(&log_file_path, "%s.%d", SAN_LOG_PATH, getpid());
 
   FILE *file = fopen(log_file_path, "r");
   free(log_file_path);
@@ -112,7 +111,7 @@ extern void _exit(int);
 #endif
 
 void panic_with_backtrace(const char *extra_msg) {
-  append_asan_log();
+  append_san_log();
 
 #ifdef CUSTOM_BACKTRACE
   char custom_backtrace[0x10000];
