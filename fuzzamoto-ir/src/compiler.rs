@@ -25,7 +25,7 @@ use bitcoin::{
     taproot::{LeafVersion, NodeInfo, TapLeafHash, TapNodeHash},
     transaction,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::{any::Any, convert::TryInto, time::Duration};
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -33,7 +33,16 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use crate::{
     AddrNetwork, AddrRecord, Instruction, Operation, Program, TaprootKeypair, TaprootLeaf,
     TaprootSpendInfo, bloom::filter_insert, generators::block::Header,
+    generators::txo::Txo as IrTxo,
 };
+
+/// Return type of [`Compiler::into_accumulated_context`]: (txos, headers, timestamp, spent).
+pub type AccumulatedContext = (
+    Vec<IrTxo>,
+    Vec<Header>,
+    Option<u64>,
+    HashSet<([u8; 32], u32)>,
+);
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
 /// on a node (i.e. mapping `fuzzamoto_ir::Program` -> `CompiledProgram`).
@@ -43,6 +52,16 @@ pub struct Compiler {
     variables: Vec<Box<dyn Any>>,
     output: CompiledProgram,
     connection_counter: usize,
+
+    accumulate_context: bool,
+    accumulated_txos: Vec<IrTxo>,
+    /// Coinbase outputs paired with the height of the block that created them. Coinbase outputs are
+    /// only spendable after `COINBASE_MATURITY` confirmations, so maturity is resolved against the
+    /// final chain tip in `into_accumulated_context` rather than released eagerly here.
+    accumulated_coinbase_txos: Vec<(u32, IrTxo)>,
+    accumulated_headers: Vec<Header>,
+    accumulated_timestamp: Option<u64>,
+    accumulated_spent: HashSet<([u8; 32], u32)>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -540,7 +559,61 @@ impl Compiler {
                 metadata: CompiledMetadata::new(),
             },
             connection_counter: 0,
+            accumulate_context: false,
+            accumulated_txos: Vec::new(),
+            accumulated_coinbase_txos: Vec::new(),
+            accumulated_headers: Vec::new(),
+            accumulated_timestamp: None,
+            accumulated_spent: HashSet::new(),
         }
+    }
+
+    /// Create a compiler that simultaneously builds a `FullProgramContext` during compilation.
+    /// After calling `compile`, use `into_accumulated_context` to retrieve the collected data.
+    #[must_use]
+    pub fn new_with_context_accumulation() -> Self {
+        Self {
+            accumulate_context: true,
+            ..Self::new()
+        }
+    }
+
+    /// Consume the compiler and return the TXOs, headers, optional timestamp, and spent outpoints
+    /// accumulated during compilation. Only meaningful when created with
+    /// `new_with_context_accumulation`. The returned TXOs are already filtered to exclude any
+    /// outputs that were spent within the same program.
+    #[must_use]
+    pub fn into_accumulated_context(self) -> AccumulatedContext {
+        // The chain tip after the program ran. A spend referencing an accumulated coinbase output
+        // would be mined no earlier than `tip_height + 1`, so it's only mature when
+        // `(tip_height + 1) - coinbase_height >= COINBASE_MATURITY`.
+        let tip_height = self
+            .accumulated_headers
+            .iter()
+            .map(|header| header.height)
+            .max();
+        let mature_coinbase_txos =
+            self.accumulated_coinbase_txos
+                .into_iter()
+                .filter_map(|(coinbase_height, txo)| {
+                    let spend_height = tip_height? + 1;
+                    (spend_height.saturating_sub(coinbase_height)
+                        >= bitcoin::blockdata::constants::COINBASE_MATURITY)
+                        .then_some(txo)
+                });
+
+        let txos = self
+            .accumulated_txos
+            .into_iter()
+            .chain(mature_coinbase_txos)
+            .filter(|txo| !self.accumulated_spent.contains(&txo.outpoint))
+            .collect();
+        (
+            txos,
+            self.accumulated_headers,
+            self.accumulated_timestamp,
+            self.accumulated_spent,
+        )
     }
 
     fn update_connection_map(
@@ -1761,8 +1834,11 @@ impl Compiler {
                 self.append_variable(*time_var + duration_var.as_secs());
             }
             Operation::SetTime => {
-                let time_var = self.get_input::<u64>(&instruction.inputs, 0)?;
-                self.output.actions.push(CompiledAction::SetTime(*time_var));
+                let time_var = *self.get_input::<u64>(&instruction.inputs, 0)?;
+                self.output.actions.push(CompiledAction::SetTime(time_var));
+                if self.accumulate_context {
+                    self.accumulated_timestamp = Some(time_var);
+                }
             }
             _ => unreachable!("Non-time operation passed to handle_time_operations"),
         }
@@ -2047,6 +2123,35 @@ impl Compiler {
 
         coinbase_tx_var.tx.txos = txos;
         coinbase_tx_var.tx.id = Txid::from_byte_array(coinbase_txid);
+
+        if self.accumulate_context {
+            let new_header = Header {
+                prev: *block.header.prev_blockhash.as_byte_array(),
+                merkle_root: *block.header.merkle_root.as_byte_array(),
+                bits: block.header.bits.to_consensus(),
+                time: block.header.time,
+                height: header_var.height + 1,
+                nonce: block.header.nonce,
+                version: block.header.version.to_consensus(),
+            };
+            let coinbase_height = new_header.height;
+            self.accumulated_headers.push(new_header);
+            // Coinbase outputs aren't spendable until they reach maturity; defer the maturity
+            // decision to `into_accumulated_context`, which knows the final chain tip.
+            for txo in &coinbase_tx_var.tx.txos {
+                self.accumulated_coinbase_txos.push((
+                    coinbase_height,
+                    IrTxo {
+                        outpoint: txo.prev_out,
+                        value: txo.value,
+                        script_pubkey: txo.scripts.script_pubkey.clone(),
+                        spending_script_sig: txo.scripts.script_sig.clone(),
+                        spending_witness: txo.scripts.witness.stack.clone(),
+                    },
+                ));
+            }
+        }
+
         let header_var_index = self.variables.len();
         self.append_variable(Header {
             prev: *block.header.prev_blockhash.as_byte_array(),
@@ -2102,12 +2207,16 @@ impl Compiler {
         let mut tx_var = self.get_input_mut::<Tx>(&instruction.inputs, 0)?.clone();
 
         // Fill in the inputs and outputs
+        let mut newly_spent: Vec<([u8; 32], u32)> = Vec::new();
         tx_var
             .tx
             .input
             .extend(tx_inputs_var.inputs.iter().map(|tx_input| {
                 let txo_var = self.get_variable::<Txo>(tx_input.txo_var).unwrap();
                 let sequence_var = self.get_variable::<u32>(tx_input.sequence_var).unwrap();
+                if self.accumulate_context {
+                    newly_spent.push(txo_var.prev_out);
+                }
                 TxIn {
                     previous_output: OutPoint::new(
                         Txid::from_slice_delegated(&txo_var.prev_out.0).unwrap(),
@@ -2118,6 +2227,7 @@ impl Compiler {
                     sequence: Sequence(*sequence_var),
                 }
             }));
+        self.accumulated_spent.extend(newly_spent);
 
         tx_var.tx.output.extend(
             tx_outputs_var
@@ -2321,6 +2431,19 @@ impl Compiler {
             .collect();
 
         tx_var.id = txid;
+
+        if self.accumulate_context {
+            for txo in &tx_var.txos {
+                self.accumulated_txos.push(IrTxo {
+                    outpoint: txo.prev_out,
+                    value: txo.value,
+                    script_pubkey: txo.scripts.script_pubkey.clone(),
+                    spending_script_sig: txo.scripts.script_sig.clone(),
+                    spending_witness: txo.scripts.witness.stack.clone(),
+                });
+            }
+        }
+
         self.append_variable(tx_var);
 
         Ok(())

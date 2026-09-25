@@ -530,12 +530,9 @@ where
     fn new(args: &[String]) -> Result<Self, String> {
         let inner: GenericScenario<TX, T> = GenericScenario::new(args)?;
 
-        let context = Self::build_program_context(&inner);
-        log::info!("IR context: {context:?}");
-
-        let txos = Self::build_txos(&inner);
-        let headers = Self::build_headers(&inner);
-        Self::dump_context(context, txos, headers)?;
+        // Collect initial TXOs and headers from the 200-block chain setup.
+        let mut txos = Self::build_txos(&inner);
+        let mut headers = Self::build_headers(&inner);
 
         #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
         let second = Self::create_and_sync_second_target(args, &inner.target)?;
@@ -544,14 +541,61 @@ where
             .header
             .time;
 
-        Ok(Self {
+        let mut scenario = Self {
             inner,
             recording_received_messages: false,
             probe_results: Vec::new(),
             #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
             second,
             futurest: u64::from(genesis_time),
-        })
+        };
+
+        // If a seed program is provided, compile it (simultaneously building context), run it,
+        // and extend the initial TXOs/headers with whatever the seed program produced.
+        let seedprogram_path = args
+            .windows(2)
+            .find(|w| w[0] == "--seedprogram")
+            .map(|w| w[1].clone());
+
+        let mut seed_timestamp: Option<u64> = None;
+
+        if let Some(path) = seedprogram_path {
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            let program: Program = postcard::from_bytes(&bytes).map_err(|e| e.to_string())?;
+
+            let mut compiler = Compiler::new_with_context_accumulation();
+            let compiled = compiler.compile(&program).map_err(|e| e.to_string())?;
+            let (seed_txos, seed_headers, ts, spent) = compiler.into_accumulated_context();
+
+            // Remove any initial (200-block chain) UTXOs that the seed program spent; the compiler
+            // has no knowledge of those, so we filter them here using the returned `spent` set.
+            txos.retain(|txo| !spent.contains(&txo.outpoint));
+            // `seed_txos` are already filtered against `spent` inside `into_accumulated_context`, so
+            // outputs the seed program created and then spent itself are not present here.
+            txos.extend(seed_txos);
+            headers.extend(seed_headers);
+            seed_timestamp = ts;
+
+            log::info!(
+                "Processing seed program with {} actions",
+                compiled.actions.len()
+            );
+            scenario.process_actions(compiled);
+
+            #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
+            Self::sync_nodes(&scenario.inner.target, &mut scenario.second)?;
+        }
+
+        // Build the context after running the seed program so that num_connections
+        // reflects any connections added by the seed program.
+        let mut context = Self::build_program_context(&scenario.inner);
+        if let Some(ts) = seed_timestamp {
+            context.timestamp = ts;
+        }
+        log::info!("IR context: {context:?}");
+        Self::dump_context(context, txos, headers)?;
+
+        Ok(scenario)
     }
 
     fn run(&mut self, testcase: TestCase) -> ScenarioResult {

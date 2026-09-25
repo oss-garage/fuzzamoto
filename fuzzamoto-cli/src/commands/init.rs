@@ -2,6 +2,13 @@ use crate::error::{CliError, Result};
 use crate::utils::{file_ops, nyx, process};
 use std::path::{Path, PathBuf};
 
+#[derive(Copy, Clone)]
+pub struct InitOptions<'a> {
+    pub secondary_bitcoind: Option<&'a PathBuf>,
+    pub rpc_path: Option<&'a PathBuf>,
+    pub seedprogram: Option<&'a PathBuf>,
+}
+
 pub struct InitCommand;
 
 impl InitCommand {
@@ -9,11 +16,15 @@ impl InitCommand {
         sharedir: &Path,
         crash_handler: &Path,
         bitcoind: &Path,
-        secondary_bitcoind: Option<&PathBuf>,
         scenario: &Path,
         nyx_dir: &Path,
-        rpc_path: Option<&PathBuf>,
+        options: InitOptions<'_>,
     ) -> Result<()> {
+        let InitOptions {
+            secondary_bitcoind,
+            rpc_path,
+            seedprogram,
+        } = options;
         file_ops::ensure_sharedir_not_exists(sharedir)?;
         file_ops::create_dir_all(sharedir)?;
 
@@ -28,6 +39,11 @@ impl InitCommand {
         if let Some(rpc) = rpc_path {
             file_ops::ensure_file_exists(rpc)?;
             file_ops::copy_file_to_dir(rpc, sharedir)?;
+        }
+
+        if let Some(seed) = seedprogram {
+            file_ops::ensure_file_exists(seed)?;
+            file_ops::copy_file_to_dir(seed, sharedir)?;
         }
 
         let mut all_deps = Vec::new();
@@ -117,14 +133,22 @@ impl InitCommand {
             .and_then(|p| p.file_name())
             .and_then(|name| name.to_str());
 
+        let seedprogram_name = seedprogram
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|name| name.to_str());
+
         nyx::create_nyx_script(
             sharedir,
             &all_deps,
             &binary_names,
             &crash_handler_name,
             scenario_name,
-            secondary_name,
-            rpc_name,
+            nyx::NyxScriptConfig {
+                secondary_bitcoind: secondary_name,
+                rpc_path: rpc_name,
+                seedprogram: seedprogram_name,
+            },
         )?;
 
         Ok(())
