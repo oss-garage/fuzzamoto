@@ -199,6 +199,7 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `BuildPayToScriptHash` | Creates a P2SH script. |
 | `BuildOpReturnScripts`| Creates an OP_RETURN script. |
 | `BuildPayToAnchor` | Creates a P2A (pay-to-anchor) script for CPFP. |
+| `BuildPayToBareMulti` | Creates a bare m-of-n multisig script. |
 | **Witness stack**| **Construct a witness stack.** |
 | `BeginWitnessStack`| Begins building a witness stack. |
 | `AddWitness` | Adds an item to the witness stack. |

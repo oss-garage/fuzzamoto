@@ -106,7 +106,7 @@ pub enum Operation {
     BuildRawScripts,
     BuildPayToWitnessScriptHash,
     // TODO: BuildPayToTaproot,
-    // TODO: BuildPayToBareMulti, BeginMultiSig, EndMultiSig
+    // TODO: BeginMultiSig, EndMultiSig
     BuildPayToPubKey,
     BuildPayToPubKeyHash,
     BuildPayToWitnessPubKeyHash,
@@ -119,6 +119,15 @@ pub enum Operation {
     BeginPrefillTransactions,
     AddPrefillTx,
     EndPrefillTransactions,
+
+    BuildPayToBareMulti {
+        /// m-of-n: number of required signatures (1..=n)
+        required: u8,
+        /// Private keys for each pubkey in the script
+        private_keys: Vec<[u8; 32]>,
+    },
+
+    // cmpctblock building operations
     BuildCompactBlock,
 
     // filterload building operations
@@ -217,6 +226,17 @@ impl fmt::Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Operation::Nop { .. } => write!(f, "Nop"),
+            Operation::BuildPayToBareMulti {
+                required,
+                private_keys,
+            } => {
+                write!(
+                    f,
+                    "BuildPayToBareMulti({}-of-{})",
+                    required,
+                    private_keys.len()
+                )
+            }
             Operation::LoadBytes(bytes) => write!(
                 f,
                 "LoadBytes(\"{}\")",
@@ -575,6 +595,7 @@ impl Operation {
             | Operation::Probe
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
+            | Operation::BuildPayToBareMulti { .. }
             | Operation::BuildTaprootTree { .. } => false,
         }
     }
@@ -741,6 +762,7 @@ impl Operation {
             | Operation::BuildCoinbaseTxInput
             | Operation::AddCoinbaseTxOutput
             | Operation::SendBlockTxn
+            | Operation::BuildPayToBareMulti { .. }
             | Operation::Probe => false,
         }
     }
@@ -797,6 +819,7 @@ impl Operation {
             Operation::LoadConnectionType(_) => vec![Variable::ConnectionType],
             Operation::LoadDuration(_) => vec![Variable::Duration],
             Operation::LoadAddr(_) => vec![Variable::AddrRecord],
+            Operation::BuildPayToBareMulti { .. } => vec![Variable::Scripts],
             Operation::LoadBlockHeight(_) => vec![Variable::BlockHeight],
             Operation::LoadCompactFilterType(_) => vec![Variable::CompactFilterType],
             Operation::SendRawMessage => vec![],
@@ -981,6 +1004,7 @@ impl Operation {
                 Variable::Scripts,
                 Variable::ConstAmount,
             ],
+            Operation::BuildPayToBareMulti { .. } => vec![Variable::SigHashFlags],
             Operation::TakeTxo => vec![Variable::ConstTx],
             Operation::TakeCoinbaseTxo => vec![Variable::ConstCoinbaseTx],
             Operation::AddWitness => vec![Variable::MutWitnessStack, Variable::Bytes],
@@ -1155,6 +1179,7 @@ impl Operation {
             | Operation::BuildOpReturnScripts
             | Operation::BuildPayToAnchor
             | Operation::BuildPayToTaproot
+            | Operation::BuildPayToBareMulti { .. }
             | Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
