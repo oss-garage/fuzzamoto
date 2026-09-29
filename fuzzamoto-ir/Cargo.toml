@@ -10,6 +10,8 @@ repository.workspace = true
 fuzz = ["reduced_pow"]
 reproduce = ["reduced_pow"]
 erlay = ["fuzzamoto/erlay"]
+# Match a target built with target-patches/bitcoin-core-erlay-collisions.patch
+erlay_collisions = ["erlay"]
 
 reduced_pow = []
 

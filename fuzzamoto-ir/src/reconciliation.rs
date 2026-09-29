@@ -12,6 +12,14 @@ use bitcoin::{
 /// Tag of the tagged hash used to combine the two salts of a reconciliation link.
 const RECON_STATIC_SALT: &str = "Tx Relay Salting";
 
+/// Short ids are reduced modulo this value before adding one. A target built with
+/// `bitcoin-core-erlay-collisions.patch` uses a tiny range so short id collisions are common.
+const SHORT_ID_MODULUS: u64 = if cfg!(feature = "erlay_collisions") {
+    0xFF
+} else {
+    0xFFFF_FFFF
+};
+
 /// Reduction polynomial of the GF(2^32) field used by 32-bit minisketches:
 /// x^32 + x^7 + x^3 + x^2 + 1.
 const FIELD_MODULUS: u32 = 0x8D;
@@ -46,7 +54,7 @@ impl ReconKeys {
     #[must_use]
     pub fn short_id(&self, wtxid: &[u8; 32]) -> u32 {
         let hash = siphash24::Hash::hash_to_u64_with_keys(self.k0, self.k1, wtxid);
-        1 + u32::try_from(hash % 0xFFFF_FFFF).expect("value is reduced modulo 2^32 - 1")
+        1 + u32::try_from(hash % SHORT_ID_MODULUS).expect("value is reduced below 2^32 - 1")
     }
 }
 
@@ -161,6 +169,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "erlay_collisions"))]
     fn short_ids_collide_like_bitcoin_core() {
         // COLLIDING_WTXID{,_2} from Bitcoin Core PR 35591's txreconciliation_tests.cpp, which
         // collide on a link salted with (2, 1).
@@ -262,6 +271,17 @@ mod tests {
         let mut extended = sketch(&elements, 5);
         extended.extend(sketch_syndromes(&elements, 5, 5));
         assert_eq!(extended, sketch(&elements, 10));
+    }
+
+    #[test]
+    #[cfg(feature = "erlay_collisions")]
+    fn short_ids_use_reduced_range() {
+        let keys = ReconKeys::from_salts(0, 10_393_729_187_455_219_830);
+        let ids: std::collections::HashSet<u32> =
+            (0u8..=255).map(|i| keys.short_id(&[i; 32])).collect();
+        assert!(ids.iter().all(|id| (1..=0xFF).contains(id)));
+        // 256 wtxids cannot map to 255 distinct short ids.
+        assert!(ids.len() < 256);
     }
 
     #[test]
