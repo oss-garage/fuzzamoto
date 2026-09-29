@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use rand::{Rng, RngCore, seq::SliceRandom};
+use rand::{
+    Rng, RngCore,
+    seq::{IteratorRandom, SliceRandom},
+};
 
 use crate::{
     Instruction, Operation, PerTestcaseMetadata, Variable,
@@ -48,14 +51,6 @@ fn append_raw_message(
     command: &str,
     payload: Vec<u8>,
 ) {
-    let command_var = builder
-        .append(Instruction {
-            inputs: vec![],
-            operation: Operation::LoadMsgType(message_type(command)),
-        })
-        .expect("Loading an Erlay message type should succeed")
-        .pop()
-        .expect("LoadMsgType should produce a variable");
     let payload_var = builder
         .append(Instruction {
             inputs: vec![],
@@ -64,9 +59,21 @@ fn append_raw_message(
         .expect("Loading an Erlay payload should succeed")
         .pop()
         .expect("LoadBytes should produce a variable");
+    send_payload(builder, connection, command, payload_var.index);
+}
+
+fn send_payload(builder: &mut ProgramBuilder, connection: usize, command: &str, payload: usize) {
+    let command_var = builder
+        .append(Instruction {
+            inputs: vec![],
+            operation: Operation::LoadMsgType(message_type(command)),
+        })
+        .expect("Loading an Erlay message type should succeed")
+        .pop()
+        .expect("LoadMsgType should produce a variable");
     builder
         .append(Instruction {
-            inputs: vec![connection, command_var.index, payload_var.index],
+            inputs: vec![connection, command_var.index, payload],
             operation: Operation::SendRawMessage,
         })
         .expect("Sending an Erlay message should succeed");
@@ -272,5 +279,218 @@ impl<R: RngCore> Generator<R> for ErlayExpensiveSketchGenerator {
 
     fn name(&self) -> &'static str {
         "ErlayExpensiveSketchGenerator"
+    }
+}
+
+/// Generates reconciliation rounds over transactions known to the program, using the salt the
+/// target announced on each pre-existing reconciliation link, so sketches decode to and
+/// `reconcildiff`s ask for short ids that match the target's reconciliation sets.
+#[derive(Debug, Default)]
+pub struct ErlayReconciliationGenerator {
+    recon_salts: Vec<Option<u64>>,
+}
+
+impl ErlayReconciliationGenerator {
+    #[must_use]
+    pub fn new(recon_salts: Vec<Option<u64>>) -> Self {
+        Self { recon_salts }
+    }
+
+    fn build_recon_set<R: RngCore>(
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        members: &[usize],
+        extra_short_ids: usize,
+    ) -> (usize, usize) {
+        let mut_set = builder
+            .append(Instruction {
+                inputs: vec![],
+                operation: Operation::BeginBuildReconSet,
+            })
+            .expect("Beginning a reconciliation set should succeed")
+            .pop()
+            .expect("BeginBuildReconSet should produce a variable");
+        for tx in members {
+            builder
+                .append(Instruction {
+                    inputs: vec![mut_set.index, *tx],
+                    operation: Operation::AddTxToReconSet,
+                })
+                .expect("Adding a transaction to a reconciliation set should succeed");
+        }
+        for _ in 0..extra_short_ids {
+            builder
+                .append(Instruction {
+                    inputs: vec![mut_set.index],
+                    operation: Operation::AddShortIdToReconSet(rng.r#gen()),
+                })
+                .expect("Adding a short id to a reconciliation set should succeed");
+        }
+        let set = builder
+            .append(Instruction {
+                inputs: vec![mut_set.index],
+                operation: Operation::EndBuildReconSet,
+            })
+            .expect("Ending a reconciliation set should succeed")
+            .pop()
+            .expect("EndBuildReconSet should produce a variable");
+        (set.index, members.len() + extra_short_ids)
+    }
+
+    fn build_payload(builder: &mut ProgramBuilder, set: usize, operation: Operation) -> usize {
+        builder
+            .append(Instruction {
+                inputs: vec![set],
+                operation,
+            })
+            .expect("Building a reconciliation payload should succeed")
+            .pop()
+            .expect("Reconciliation payload builders should produce a variable")
+            .index
+    }
+}
+
+impl<R: RngCore> Generator<R> for ErlayReconciliationGenerator {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&PerTestcaseMetadata>,
+    ) -> GeneratorResult {
+        let Some((recon_connection, target_salt)) = self
+            .recon_salts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, salt)| salt.map(|salt| (index, salt)))
+            .choose(rng)
+        else {
+            return Err(GeneratorError::InvalidContext(builder.context().clone()));
+        };
+        let txs: Vec<usize> = builder
+            .get_random_variables(rng, &Variable::ConstTx)
+            .iter()
+            .map(|tx| tx.index)
+            .collect();
+        if txs.is_empty() {
+            return Err(GeneratorError::MissingVariables);
+        }
+
+        let connection = builder
+            .append(Instruction {
+                inputs: vec![],
+                operation: Operation::LoadConnection(recon_connection),
+            })
+            .expect("Loading a reconciliation connection should succeed")
+            .pop()
+            .expect("LoadConnection should produce a variable")
+            .index;
+
+        // The target only adds transactions it received from other peers to this link's set.
+        let mut relayed = Vec::new();
+        if rng.gen_bool(0.8) && builder.context().num_connections > 1 {
+            let relay_connection = (0..builder.context().num_connections)
+                .filter(|index| *index != recon_connection)
+                .choose(rng)
+                .expect("There is more than one connection");
+            let relay_connection = builder
+                .append(Instruction {
+                    inputs: vec![],
+                    operation: Operation::LoadConnection(relay_connection),
+                })
+                .expect("Loading a relay connection should succeed")
+                .pop()
+                .expect("LoadConnection should produce a variable")
+                .index;
+            for tx in txs.iter().filter(|_| rng.gen_bool(0.75)) {
+                builder
+                    .append(Instruction {
+                        inputs: vec![relay_connection, *tx],
+                        operation: Operation::SendTx,
+                    })
+                    .expect("Sending a transaction should succeed");
+                relayed.push(*tx);
+            }
+        }
+        advance_reconciliation_timer(builder);
+
+        if rng.gen_bool(0.5) {
+            let members: Vec<usize> = txs.iter().copied().filter(|_| rng.gen_bool(0.75)).collect();
+            let extra_short_ids = *[0, 0, 1, 3].choose(rng).unwrap();
+            let (set, set_size) = Self::build_recon_set(builder, rng, &members, extra_short_ids);
+            let set_size = u32::try_from(set_size).expect("reconciliation sets are small");
+
+            // The target initiated: answer its request with a sketch, then maybe an extension.
+            // The target decodes against its current set, so let relayed transactions reach it
+            // first if the request went out before they did.
+            advance_reconciliation_timer(builder);
+            let capacity = *[
+                set_size,
+                set_size + 1,
+                set_size * 2 + 1,
+                1,
+                rng.gen_range(0..64),
+            ]
+            .choose(rng)
+            .unwrap();
+            let sketch = Self::build_payload(
+                builder,
+                set,
+                Operation::BuildReconSketch {
+                    target_salt,
+                    first_syndrome: 0,
+                    capacity,
+                },
+            );
+            send_payload(builder, connection, "sketch", sketch);
+            if rng.gen_bool(0.5) {
+                let extension = Self::build_payload(
+                    builder,
+                    set,
+                    Operation::BuildReconSketch {
+                        target_salt,
+                        first_syndrome: capacity,
+                        capacity,
+                    },
+                );
+                send_payload(builder, connection, "sketch", extension);
+            }
+        } else {
+            // We initiate: request the target's sketch and ask for transactions by short id. The
+            // target snapshots its set when answering, so give relayed transactions time to enter
+            // it, and only ask for as many as a sketch of that set can yield.
+            advance_reconciliation_timer(builder);
+            let pool = if relayed.is_empty() { &txs } else { &relayed };
+            let count = rng.gen_range(1..=2);
+            let members: Vec<usize> = pool.choose_multiple(rng, count).copied().collect();
+            let extra_short_ids = usize::from(rng.gen_bool(0.1));
+            let (set, set_size) = Self::build_recon_set(builder, rng, &members, extra_short_ids);
+            let request_size = *[0, 1, u16::try_from(set_size).unwrap_or(u16::MAX)]
+                .choose(rng)
+                .unwrap();
+            append_raw_message(
+                builder,
+                connection,
+                "reqtxrcncl",
+                reconciliation_request(request_size, *[0, 8_192, Q_PRECISION].choose(rng).unwrap()),
+            );
+            if rng.gen_bool(0.3) {
+                append_raw_message(builder, connection, "reqsketchext", vec![]);
+            }
+            let diff = Self::build_payload(
+                builder,
+                set,
+                Operation::BuildReconcilDiff {
+                    target_salt,
+                    result: u8::from(rng.gen_bool(0.8)),
+                },
+            );
+            send_payload(builder, connection, "reconcildiff", diff);
+        }
+
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        "ErlayReconciliationGenerator"
     }
 }

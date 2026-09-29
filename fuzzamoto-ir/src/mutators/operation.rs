@@ -392,6 +392,55 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                     key_count_encoding,
                 }
             }
+            Operation::AddShortIdToReconSet(short_id) => Operation::AddShortIdToReconSet(
+                *[0, 1, u32::MAX, short_id.wrapping_add(1), rng.r#gen()]
+                    .choose(rng)
+                    .unwrap(),
+            ),
+            Operation::BuildReconSketch {
+                target_salt,
+                first_syndrome,
+                capacity,
+            } => {
+                let mut first_syndrome = *first_syndrome;
+                let mut capacity = *capacity;
+                if rng.gen_bool(0.5) {
+                    capacity = *[
+                        0,
+                        1,
+                        capacity.saturating_sub(1),
+                        capacity.saturating_add(1),
+                        capacity.saturating_mul(2),
+                    ]
+                    .choose(rng)
+                    .unwrap();
+                } else {
+                    first_syndrome = *[
+                        0,
+                        capacity,
+                        first_syndrome.saturating_add(1),
+                        rng.gen_range(0..64),
+                    ]
+                    .choose(rng)
+                    .unwrap();
+                }
+                Operation::BuildReconSketch {
+                    target_salt: *target_salt,
+                    first_syndrome,
+                    capacity,
+                }
+            }
+            Operation::BuildReconcilDiff {
+                target_salt,
+                result,
+            } => Operation::BuildReconcilDiff {
+                target_salt: *target_salt,
+                result: *[0, 1, 2, u8::MAX]
+                    .iter()
+                    .filter(|r| *r != result)
+                    .choose(rng)
+                    .unwrap(),
+            },
             op => op.clone(),
         };
 

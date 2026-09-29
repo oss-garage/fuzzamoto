@@ -5,11 +5,12 @@ use fuzzamoto_ir::{
     AdvanceTimeGenerator, BlockGenerator, BlockTxnGenerator, BloomFilterAddGenerator,
     BloomFilterClearGenerator, BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator,
     CompactFilterQueryGenerator, ErlayExpensiveSketchGenerator, ErlayMessageGenerator,
-    GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator, InventoryGenerator,
-    LargeTxGenerator, LongChainGenerator, NonStandardSpendGenerator, OneParentOneChildGenerator,
-    OperationMutator, Program, ReorgBlockGenerator, SendBlockGenerator, SendMessageGenerator,
-    SingleTxGenerator, TipBlockGenerator, TxoGenerator, WitnessGenerator,
-    cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
+    ErlayReconciliationGenerator, GetAddrGenerator, GetDataGenerator, HeaderGenerator,
+    InputMutator, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
+    NonStandardSpendGenerator, OneParentOneChildGenerator, OperationMutator, Program,
+    ReorgBlockGenerator, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator,
+    TipBlockGenerator, TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer,
+    instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
 use libafl::{
@@ -438,6 +439,13 @@ where
             (
                 ERLAY_WEIGHT * 10.0,
                 IrGenerator::new(ErlayExpensiveSketchGenerator, rng.clone())
+            ),
+            (
+                ERLAY_WEIGHT * 100.0,
+                IrGenerator::new(
+                    ErlayReconciliationGenerator::new(full_program_context.recon_salts.clone()),
+                    rng.clone()
+                )
             ),
         ];
         log_weights(

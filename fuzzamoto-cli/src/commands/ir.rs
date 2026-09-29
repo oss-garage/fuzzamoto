@@ -6,10 +6,11 @@ use fuzzamoto_ir::{
     AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator, AdvanceTimeGenerator,
     BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator, BloomFilterLoadGenerator,
     CompactFilterQueryGenerator, ErlayExpensiveSketchGenerator, ErlayMessageGenerator,
-    FullProgramContext, Generator, GetAddrGenerator, GetDataGenerator, HeaderGenerator,
-    InstructionContext, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
-    NonStandardSpendGenerator, OneParentOneChildGenerator, Program, ProgramBuilder,
-    SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
+    ErlayReconciliationGenerator, FullProgramContext, Generator, GetAddrGenerator,
+    GetDataGenerator, HeaderGenerator, InstructionContext, InventoryGenerator, LargeTxGenerator,
+    LongChainGenerator, NonStandardSpendGenerator, OneParentOneChildGenerator, Program,
+    ProgramBuilder, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator,
+    WitnessGenerator,
 };
 
 use rand::Rng;
@@ -214,6 +215,9 @@ fn all_generators(context: &FullProgramContext) -> Vec<Box<dyn Generator<ThreadR
         }),
         Box::new(ErlayMessageGenerator),
         Box::new(ErlayExpensiveSketchGenerator),
+        Box::new(ErlayReconciliationGenerator::new(
+            context.recon_salts.clone(),
+        )),
         Box::new(WitnessGenerator::new()),
         Box::new(SingleTxGenerator),
         Box::new(OneParentOneChildGenerator),

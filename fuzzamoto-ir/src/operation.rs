@@ -325,6 +325,23 @@ pub enum Operation {
         required_encoding: ScriptIntEncoding,
         key_count_encoding: ScriptIntEncoding,
     },
+    // BIP-330 reconciliation set building (appended to keep serialized programs compatible)
+    BeginBuildReconSet,
+    AddTxToReconSet,
+    AddShortIdToReconSet(u32),
+    EndBuildReconSet,
+    /// `sketch` payload with syndromes `first_syndrome..first_syndrome + capacity` of a set, on
+    /// the link on which the target announced `target_salt`
+    BuildReconSketch {
+        target_salt: u64,
+        first_syndrome: u32,
+        capacity: u32,
+    },
+    /// `reconcildiff` payload asking for a set's short ids
+    BuildReconcilDiff {
+        target_salt: u64,
+        result: u8,
+    },
 }
 
 impl fmt::Display for Operation {
@@ -579,6 +596,25 @@ impl fmt::Display for Operation {
                 }
                 write!(f, ")")
             }
+
+            Operation::BeginBuildReconSet => write!(f, "BeginBuildReconSet"),
+            Operation::AddTxToReconSet => write!(f, "AddTxToReconSet"),
+            Operation::AddShortIdToReconSet(short_id) => {
+                write!(f, "AddShortIdToReconSet({short_id:#010x})")
+            }
+            Operation::EndBuildReconSet => write!(f, "EndBuildReconSet"),
+            Operation::BuildReconSketch {
+                target_salt,
+                first_syndrome,
+                capacity,
+            } => write!(
+                f,
+                "BuildReconSketch(salt={target_salt}, first={first_syndrome}, capacity={capacity})"
+            ),
+            Operation::BuildReconcilDiff {
+                target_salt,
+                result,
+            } => write!(f, "BuildReconcilDiff(salt={target_salt}, result={result})"),
         }
     }
 }
@@ -610,9 +646,15 @@ impl Operation {
             | Operation::BeginBuildCoinbaseTx
             | Operation::BeginBuildBlockTxn
             | Operation::BeginBuildCoinbaseTxOutputs
-            | Operation::BeginPrefillTransactions => true,
+            | Operation::BeginPrefillTransactions
+            | Operation::BeginBuildReconSet => true,
             // Exhaustive match to fail when new ops are added
-            Operation::Nop { .. }
+            Operation::AddTxToReconSet
+            | Operation::AddShortIdToReconSet(_)
+            | Operation::EndBuildReconSet
+            | Operation::BuildReconSketch { .. }
+            | Operation::BuildReconcilDiff { .. }
+            | Operation::Nop { .. }
             | Operation::LoadBytes(_)
             | Operation::LoadMsgType(_)
             | Operation::LoadNode(_)
@@ -760,6 +802,7 @@ impl Operation {
                     Operation::BeginPrefillTransactions,
                     Operation::EndPrefillTransactions
                 )
+                | (Operation::BeginBuildReconSet, Operation::EndBuildReconSet)
         )
     }
 
@@ -778,9 +821,15 @@ impl Operation {
             | Operation::EndBuildCoinbaseTx
             | Operation::EndBuildBlockTxn
             | Operation::EndBuildCoinbaseTxOutputs
-            | Operation::EndPrefillTransactions => true,
+            | Operation::EndPrefillTransactions
+            | Operation::EndBuildReconSet => true,
             // Exhaustive match to fail when new ops are added
-            Operation::Nop { .. }
+            Operation::BeginBuildReconSet
+            | Operation::AddTxToReconSet
+            | Operation::AddShortIdToReconSet(_)
+            | Operation::BuildReconSketch { .. }
+            | Operation::BuildReconcilDiff { .. }
+            | Operation::Nop { .. }
             | Operation::LoadBytes(_)
             | Operation::LoadMsgType(_)
             | Operation::LoadNode(_)
@@ -1061,6 +1110,13 @@ impl Operation {
             Operation::SendCompactBlock => vec![],
             Operation::SendBlockTxn => vec![],
             Operation::Probe => vec![],
+
+            Operation::BeginBuildReconSet => vec![],
+            Operation::AddTxToReconSet => vec![],
+            Operation::AddShortIdToReconSet(_) => vec![],
+            Operation::EndBuildReconSet => vec![Variable::ConstReconSet],
+            Operation::BuildReconSketch { .. } => vec![Variable::Bytes],
+            Operation::BuildReconcilDiff { .. } => vec![Variable::Bytes],
         }
     }
 
@@ -1219,6 +1275,13 @@ impl Operation {
                 vec![Variable::Scripts, Variable::TaprootAnnex]
             }
             Operation::TaprootTxoUseAnnex => vec![Variable::Txo, Variable::TaprootAnnex],
+            Operation::AddTxToReconSet => vec![Variable::MutReconSet, Variable::ConstTx],
+            Operation::AddShortIdToReconSet(_) | Operation::EndBuildReconSet => {
+                vec![Variable::MutReconSet]
+            }
+            Operation::BuildReconSketch { .. } | Operation::BuildReconcilDiff { .. } => {
+                vec![Variable::ConstReconSet]
+            }
             // Operations with no inputs
             Operation::Nop { .. }
             | Operation::LoadBytes(_)
@@ -1254,6 +1317,7 @@ impl Operation {
             | Operation::BeginBlockTransactions
             | Operation::BeginWitnessStack
             | Operation::BeginPrefillTransactions
+            | Operation::BeginBuildReconSet
             | Operation::BuildPayToAnchor
             | Operation::Probe => vec![],
         }
@@ -1276,6 +1340,7 @@ impl Operation {
             Operation::BeginBuildCoinbaseTxOutputs => vec![Variable::MutTxOutputs],
             Operation::BeginBuildBlockTxn => vec![Variable::MutBlockTxn],
             Operation::BeginPrefillTransactions => vec![Variable::MutPrefillTransactions],
+            Operation::BeginBuildReconSet => vec![Variable::MutReconSet],
             Operation::Nop {
                 outputs: _,
                 inner_outputs,
@@ -1381,6 +1446,11 @@ impl Operation {
             | Operation::EndBuildBlockTxn
             | Operation::AddTxToBlockTxn
             | Operation::SendBlockTxn
+            | Operation::AddTxToReconSet
+            | Operation::AddShortIdToReconSet(_)
+            | Operation::EndBuildReconSet
+            | Operation::BuildReconSketch { .. }
+            | Operation::BuildReconcilDiff { .. }
             | Operation::Probe => vec![],
         }
     }
