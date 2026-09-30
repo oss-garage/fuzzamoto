@@ -145,6 +145,8 @@ impl Instruction {
             | Operation::BuildCoinbaseTxInput
             | Operation::AddCoinbaseTxOutput
             | Operation::AddTxToBlockTxn
+            | Operation::AddIndexToGetBlockTxn
+            | Operation::SendGetBlockTxn
             | Operation::SendGetData
             | Operation::SendGetAddr
             | Operation::SendInv
@@ -192,6 +194,8 @@ impl Instruction {
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::BeginBuildBlockTxn
             | Operation::EndBuildBlockTxn
+            | Operation::BeginBuildGetBlockTxn
+            | Operation::EndBuildGetBlockTxn
             | Operation::Probe => false,
         }
     }
@@ -213,6 +217,7 @@ impl Instruction {
                 Operation::BeginBuildFilterLoad => Some(InstructionContext::BuildFilter),
                 Operation::BeginBuildCoinbaseTx => Some(InstructionContext::BuildCoinbaseTx),
                 Operation::BeginBuildBlockTxn => Some(InstructionContext::BuildBlockTxn),
+                Operation::BeginBuildGetBlockTxn => Some(InstructionContext::BuildGetBlockTxn),
                 Operation::BeginBuildCoinbaseTxOutputs => {
                     Some(InstructionContext::BuildCoinbaseTxOutputs)
                 }
@@ -250,5 +255,6 @@ pub enum InstructionContext {
     BuildCoinbaseTx,
     BuildCoinbaseTxOutputs,
     BuildBlockTxn,
+    BuildGetBlockTxn,
     BuildPrefill,
 }

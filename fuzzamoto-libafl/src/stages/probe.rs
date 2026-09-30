@@ -77,6 +77,24 @@ where
                     txvec.add_block_tx_request(get_block_txn.clone());
                 }
             }
+            ProbeResult::CompactBlock { announcement } => {
+                let current = *state.corpus().current();
+                if let Some(cur) = current
+                    && let Ok(meta) = state.metadata_mut::<RuntimeMetadata>()
+                {
+                    let txvec = meta.metadatas.entry(cur).or_default();
+                    txvec.add_compact_block_announcement(announcement.clone());
+                }
+            }
+            ProbeResult::BlockAnnounced { announcement } => {
+                let current = *state.corpus().current();
+                if let Some(cur) = current
+                    && let Ok(meta) = state.metadata_mut::<RuntimeMetadata>()
+                {
+                    let txvec = meta.metadatas.entry(cur).or_default();
+                    txvec.add_block_announcement(announcement.clone());
+                }
+            }
             ProbeResult::Failure { command, reason } => {
                 log::info!("Command {command:?} couln't be parsed; reason: {reason:?}");
             }

@@ -213,6 +213,10 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `BeginBuildBlockTxn` | Begins building a blocktxn message after sending a compact block. |
 | `AddTxToBlockTxn` | Adds a transaction to the blocktxn message. |
 | `EndBuildBlockTxn` | Finishes building a blocktxn message. |
+| **Getblocktxn building** | **Construct a BIP152 getblocktxn request (compact block reconstruction side).**|
+| `BeginBuildGetBlockTxn` | Begins building a getblocktxn request for a block the node announced via `cmpctblock`. |
+| `AddIndexToGetBlockTxn` | Adds a block-level transaction index to the request. |
+| `EndBuildGetBlockTxn` | Finishes building a getblocktxn request. |
 | **Filter building** | **Construct a BIP37 filter.** |
 | `BeginBuildFilterLoad` | Begins building a filter. |
 | `AddTxToFilter` | Adds a transaction to a filter. |
@@ -258,6 +262,7 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `SendGetCFCheckpt`| Sends a `getcfcheckpt` message. |
 | `SendCompactBlock` | Sends a `cmpctblock` message. |
 | `SendBlockTxn` | Sends a `blocktxn` message. |
+| `SendGetBlockTxn` | Sends a `getblocktxn` message (requesting transactions for a compact block the node announced to us). |
 | **Other** | |
 | `Nop` | No operation. Used during minimization. |
 | `Probe` | Tells the scenario to probe state for the fuzzer (e.g. received messages, tip hash, ...). |
@@ -295,6 +300,17 @@ fuzzing campaign. The following generators are available:
   block
 - `CompactBlockGenerator`: Generates instructions to build and send a compact
   block for an existing block, with a randomly chosen prefill transaction list
+- `BlockTxnGenerator`: Generates instructions to build and send a `blocktxn`
+  message in response to a `getblocktxn` the node sent us (recorded by the probe)
+- `GetCompactBlockGenerator`: Generates a `getdata(MSG_CMPCT_BLOCK)` to actively
+  fetch a compact block for a block the node announced via `headers`/`inv`
+  (BIP152 low bandwidth path)
+- `GetBlockTxnGenerator`: Generates a `getblocktxn` request in response to a
+  `cmpctblock` the node announced to us (recorded by the probe), simulating the
+  compact block reconstruction side. Requested indexes are either *faithful*
+  (the transactions a peer with an empty mempool could not reconstruct, i.e. the
+  non-prefilled positions) or *adversarial* (an arbitrary, possibly out-of-range
+  set to exercise the node's validation and `blocktxn` response path)
 - `OneParentOneChildGenerator`: Generates instructions for building two new
   transactions (a 1-parent 1-child package) and sending them to a node
 - ... see

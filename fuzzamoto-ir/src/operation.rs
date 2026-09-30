@@ -89,6 +89,13 @@ pub enum Operation {
     AddTxToBlockTxn,
     EndBuildBlockTxn,
 
+    /// `getblocktxn` request building operations (BIP152). Used to ask the node
+    /// under test for specific transactions of a block it announced to us via a
+    /// `cmpctblock` message (simulating the compact block reconstruction side).
+    BeginBuildGetBlockTxn,
+    AddIndexToGetBlockTxn,
+    EndBuildGetBlockTxn,
+
     /// Send a message given a connection, message type and bytes
     SendRawMessage,
     /// Advance a time variable by a given duration
@@ -208,6 +215,7 @@ pub enum Operation {
     SendFilterClear,
     SendCompactBlock,
     SendBlockTxn,
+    SendGetBlockTxn,
 
     TaprootScriptsUseAnnex,
     TaprootTxoUseAnnex,
@@ -217,7 +225,6 @@ pub enum Operation {
         /// None = key-path only spend; Some = script-path with one spendable leaf
         script_leaf: Option<TaprootLeafSpec>,
     },
-    // TODO: SendGetBlockTxn
     // TODO: SendGetBlocks
     // TODO: SendGetHeaders
 }
@@ -370,6 +377,9 @@ impl fmt::Display for Operation {
             Operation::BeginBuildBlockTxn => write!(f, "BeginBuildBlockTxn"),
             Operation::AddTxToBlockTxn => write!(f, "AddTxToBlockTxn"),
             Operation::EndBuildBlockTxn => write!(f, "EndBuildBlockTxn"),
+            Operation::BeginBuildGetBlockTxn => write!(f, "BeginBuildGetBlockTxn"),
+            Operation::AddIndexToGetBlockTxn => write!(f, "AddIndexToGetBlockTxn"),
+            Operation::EndBuildGetBlockTxn => write!(f, "EndBuildGetBlockTxn"),
             Operation::BeginBuildFilterLoad => write!(f, "BeginBuildFilterLoad"),
             Operation::EndBuildFilterLoad => write!(f, "EndBuildFilterLoad"),
             Operation::AddTxToFilter => write!(f, "AddTxToFilter"),
@@ -442,6 +452,7 @@ impl fmt::Display for Operation {
             Operation::SendFilterClear => write!(f, "SendFilterClear"),
             Operation::SendCompactBlock => write!(f, "SendCompactBlock"),
             Operation::SendBlockTxn => write!(f, "SendBlockTxn"),
+            Operation::SendGetBlockTxn => write!(f, "SendGetBlockTxn"),
 
             Operation::Probe => write!(f, "Probe"),
 
@@ -493,6 +504,7 @@ impl Operation {
             | Operation::BeginBuildFilterLoad
             | Operation::BeginBuildCoinbaseTx
             | Operation::BeginBuildBlockTxn
+            | Operation::BeginBuildGetBlockTxn
             | Operation::BeginBuildCoinbaseTxOutputs
             | Operation::BeginPrefillTransactions => true,
             // Exhaustive match to fail when new ops are added
@@ -546,6 +558,9 @@ impl Operation {
             | Operation::LoadNonce(..)
             | Operation::AddTxToBlockTxn
             | Operation::EndBuildBlockTxn
+            | Operation::AddIndexToGetBlockTxn
+            | Operation::EndBuildGetBlockTxn
+            | Operation::SendGetBlockTxn
             | Operation::EndBuildTx
             | Operation::EndBuildTxInputs
             | Operation::EndBuildTxOutputs
@@ -640,6 +655,10 @@ impl Operation {
                 )
                 | (Operation::BeginBuildBlockTxn, Operation::EndBuildBlockTxn)
                 | (
+                    Operation::BeginBuildGetBlockTxn,
+                    Operation::EndBuildGetBlockTxn
+                )
+                | (
                     Operation::BeginPrefillTransactions,
                     Operation::EndPrefillTransactions
                 )
@@ -660,6 +679,7 @@ impl Operation {
             | Operation::EndBuildFilterLoad
             | Operation::EndBuildCoinbaseTx
             | Operation::EndBuildBlockTxn
+            | Operation::EndBuildGetBlockTxn
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::EndPrefillTransactions => true,
             // Exhaustive match to fail when new ops are added
@@ -705,6 +725,9 @@ impl Operation {
             | Operation::LoadNonce(..)
             | Operation::BeginBuildBlockTxn
             | Operation::AddTxToBlockTxn
+            | Operation::BeginBuildGetBlockTxn
+            | Operation::AddIndexToGetBlockTxn
+            | Operation::SendGetBlockTxn
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::BuildTaprootTree { .. }
@@ -869,6 +892,10 @@ impl Operation {
             Operation::AddTxToBlockTxn => vec![],
             Operation::EndBuildBlockTxn => vec![Variable::ConstBlockTxn],
 
+            Operation::BeginBuildGetBlockTxn => vec![],
+            Operation::AddIndexToGetBlockTxn => vec![],
+            Operation::EndBuildGetBlockTxn => vec![Variable::ConstBlockTxnRequest],
+
             Operation::BeginBuildFilterLoad => vec![],
             Operation::AddTxToFilter => vec![],
             Operation::AddTxoToFilter => vec![],
@@ -939,6 +966,7 @@ impl Operation {
             Operation::SendFilterClear => vec![],
             Operation::SendCompactBlock => vec![],
             Operation::SendBlockTxn => vec![],
+            Operation::SendGetBlockTxn => vec![],
             Operation::Probe => vec![],
         }
     }
@@ -1068,6 +1096,15 @@ impl Operation {
             Operation::AddTxToBlockTxn => vec![Variable::MutBlockTxn, Variable::ConstTx],
             Operation::EndBuildBlockTxn => vec![Variable::MutBlockTxn],
 
+            Operation::SendGetBlockTxn => {
+                vec![Variable::Connection, Variable::ConstBlockTxnRequest]
+            }
+            Operation::BeginBuildGetBlockTxn => vec![Variable::Block],
+            Operation::AddIndexToGetBlockTxn => {
+                vec![Variable::MutBlockTxnRequest, Variable::Size]
+            }
+            Operation::EndBuildGetBlockTxn => vec![Variable::MutBlockTxnRequest],
+
             Operation::BeginBuildFilterLoad => vec![Variable::ConstFilterLoad],
             Operation::AddTxToFilter => vec![Variable::MutFilterLoad, Variable::ConstTx],
             Operation::AddTxoToFilter => vec![Variable::MutFilterLoad, Variable::Txo],
@@ -1151,6 +1188,7 @@ impl Operation {
             Operation::BeginBuildCoinbaseTx => vec![Variable::MutTx],
             Operation::BeginBuildCoinbaseTxOutputs => vec![Variable::MutTxOutputs],
             Operation::BeginBuildBlockTxn => vec![Variable::MutBlockTxn],
+            Operation::BeginBuildGetBlockTxn => vec![Variable::MutBlockTxnRequest],
             Operation::BeginPrefillTransactions => vec![Variable::MutPrefillTransactions],
             Operation::Nop {
                 outputs: _,
@@ -1256,6 +1294,9 @@ impl Operation {
             | Operation::EndBuildBlockTxn
             | Operation::AddTxToBlockTxn
             | Operation::SendBlockTxn
+            | Operation::AddIndexToGetBlockTxn
+            | Operation::EndBuildGetBlockTxn
+            | Operation::SendGetBlockTxn
             | Operation::Probe => vec![],
         }
     }

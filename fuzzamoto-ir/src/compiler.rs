@@ -475,6 +475,12 @@ impl Compiler {
                     self.handle_bip152_blocktxn_operations(instruction)?;
                 }
 
+                Operation::BeginBuildGetBlockTxn
+                | Operation::EndBuildGetBlockTxn
+                | Operation::AddIndexToGetBlockTxn => {
+                    self.handle_bip152_getblocktxn_operations(instruction)?;
+                }
+
                 Operation::AddConnection | Operation::AddConnectionWithHandshake { .. } => {
                     self.handle_new_connection_operations(instruction)?;
                 }
@@ -504,7 +510,8 @@ impl Compiler {
                 | Operation::SendFilterAdd
                 | Operation::SendFilterClear
                 | Operation::SendCompactBlock
-                | Operation::SendBlockTxn => {
+                | Operation::SendBlockTxn
+                | Operation::SendGetBlockTxn => {
                     self.handle_message_sending_operations(instruction)?;
                 }
 
@@ -1434,6 +1441,17 @@ impl Compiler {
                     .clone();
                 self.emit_send_message(*connection_var, "blocktxn", &blocktxn);
             }
+            Operation::SendGetBlockTxn => {
+                let connection_var = *self.get_input::<usize>(&instruction.inputs, 0)?;
+                let request = self
+                    .get_input::<bitcoin::bip152::BlockTransactionsRequest>(&instruction.inputs, 1)?
+                    .clone();
+                let sanitized = bitcoin::bip152::BlockTransactionsRequest {
+                    block_hash: request.block_hash,
+                    indexes: sanitize_getblocktxn_indexes(request.indexes),
+                };
+                self.emit_send_message(connection_var, "getblocktxn", &sanitized);
+            }
             Operation::SendRawMessage => {
                 let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
                 let message_type_var = self.get_input::<[char; 12]>(&instruction.inputs, 1)?;
@@ -1636,6 +1654,40 @@ impl Compiler {
             }
             _ => unreachable!(
                 "Non-message-sending operation passed to handle_message_sending_operations"
+            ),
+        }
+        Ok(())
+    }
+
+    fn handle_bip152_getblocktxn_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginBuildGetBlockTxn => {
+                let block = self.get_input::<Block>(&instruction.inputs, 0)?;
+                let request = bitcoin::bip152::BlockTransactionsRequest {
+                    block_hash: block.block_hash(),
+                    indexes: Vec::new(),
+                };
+                self.append_variable(request);
+            }
+            Operation::AddIndexToGetBlockTxn => {
+                let index = *self.get_input::<usize>(&instruction.inputs, 1)?;
+                let request = self.get_input_mut::<bitcoin::bip152::BlockTransactionsRequest>(
+                    &instruction.inputs,
+                    0,
+                )?;
+                request.indexes.push(index as u64);
+            }
+            Operation::EndBuildGetBlockTxn => {
+                let request = self
+                    .get_input::<bitcoin::bip152::BlockTransactionsRequest>(&instruction.inputs, 0)?
+                    .clone();
+                self.append_variable(request);
+            }
+            _ => unreachable!(
+                "Non-getblocktxn operation passed to handle_bip152_getblocktxn_operations"
             ),
         }
         Ok(())
@@ -2413,6 +2465,19 @@ impl Compiler {
     }
 }
 
+/// Sanitize the index list of a `getblocktxn` request before encoding.
+///
+/// `BlockTransactionsRequest` is differentially `VarInt` encoded, which panics on non-increasing
+/// indexes or on `u64::MAX`. The IR (and its mutators) may produce arbitrary index values, so we
+/// drop `u64::MAX`, sort and dedup to guarantee a panic-free, well-formed encoding. The semantic
+/// fuzzing value (e.g. out-of-range indexes past the end of the block) is preserved.
+fn sanitize_getblocktxn_indexes(mut indexes: Vec<u64>) -> Vec<u64> {
+    indexes.retain(|&i| i != u64::MAX);
+    indexes.sort_unstable();
+    indexes.dedup();
+    indexes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2423,6 +2488,29 @@ mod tests {
     use bitcoin::{
         Transaction, consensus::Decodable, opcodes::all::OP_PUSHNUM_1, taproot::LeafVersion,
     };
+
+    #[test]
+    fn sanitize_getblocktxn_indexes_yields_encodable_request() {
+        use bitcoin::bip152::BlockTransactionsRequest;
+        use bitcoin::hashes::Hash;
+
+        // Hostile index list: out of order, duplicates, and u64::MAX (which would otherwise panic
+        // the differential VarInt encoder).
+        let raw = vec![5u64, 1, 1, 0, 9, u64::MAX, 3, 9];
+        let sanitized = sanitize_getblocktxn_indexes(raw);
+        assert_eq!(sanitized, vec![0, 1, 3, 5, 9]);
+
+        let request = BlockTransactionsRequest {
+            block_hash: bitcoin::BlockHash::all_zeros(),
+            indexes: sanitized.clone(),
+        };
+
+        // Must encode without panicking and decode back to the same indexes.
+        let bytes = bitcoin::consensus::encode::serialize(&request);
+        let decoded = BlockTransactionsRequest::consensus_decode(&mut bytes.as_slice())
+            .expect("sanitized getblocktxn request should decode");
+        assert_eq!(decoded.indexes, sanitized);
+    }
 
     #[test]
     fn compile_send_getaddr_emits_getaddr_message() {
