@@ -4,5 +4,5 @@ pub mod init;
 pub mod ir;
 
 pub use coverage::CoverageCommand;
-pub use init::InitCommand;
+pub use init::{InitCommand, Sanitizer};
 pub use ir::IrCommand;
