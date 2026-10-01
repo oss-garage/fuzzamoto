@@ -7,8 +7,8 @@ use fuzzamoto_ir::{
     BlockGenerator, BloomFilterAddGenerator, BloomFilterClearGenerator, BloomFilterLoadGenerator,
     CompactFilterQueryGenerator, FullProgramContext, Generator, GetAddrGenerator, GetDataGenerator,
     HeaderGenerator, InstructionContext, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
-    OneParentOneChildGenerator, Program, ProgramBuilder, SendBlockGenerator, SendMessageGenerator,
-    SingleTxGenerator, TxoGenerator, WitnessGenerator,
+    NonStandardSpendGenerator, OneParentOneChildGenerator, Program, ProgramBuilder,
+    SendBlockGenerator, SendMessageGenerator, SingleTxGenerator, TxoGenerator, WitnessGenerator,
 };
 
 use rand::Rng;
@@ -213,6 +213,10 @@ fn all_generators(context: &FullProgramContext) -> Vec<Box<dyn Generator<ThreadR
         Box::new(LongChainGenerator),
         Box::new(LargeTxGenerator),
         Box::new(TxoGenerator::new(context.txos.clone())),
+        Box::new(NonStandardSpendGenerator::new(
+            &context.headers,
+            context.txos.clone(),
+        )),
         Box::new(AddrRelayGenerator::default()),
         Box::new(AddrRelayV2Generator::default()),
         Box::new(GetAddrGenerator),

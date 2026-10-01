@@ -19,7 +19,7 @@ use rand::{Rng, RngCore, seq::SliceRandom};
 
 use super::{GeneratorError, GeneratorResult};
 
-enum OutputType {
+pub(crate) enum OutputType {
     PayToWitnessScriptHash,
     PayToScriptHash,
     PayToAnchor,
@@ -28,6 +28,8 @@ enum OutputType {
     PayToWitnessPubKeyHash,
     PayToTaproot,
     PayToBareMulti,
+    /// Always non-minimally encoded or above the standard key count, never consensus-invalid
+    PayToEncodedBareMulti,
     FindAndDelete,
     OpReturn,
 }
@@ -127,6 +129,7 @@ fn build_outputs<R: RngCore>(
             }
             OutputType::PayToTaproot => build_taproot_scripts(builder, rng),
             OutputType::PayToBareMulti => build_bare_multi_scripts(builder, rng),
+            OutputType::PayToEncodedBareMulti => build_bare_multi(builder, rng, true, false),
             OutputType::FindAndDelete => build_find_and_delete_scripts(builder, rng),
         };
 
@@ -146,7 +149,7 @@ fn build_outputs<R: RngCore>(
     }
 }
 
-fn build_tx<R: RngCore>(
+pub(crate) fn build_tx<R: RngCore>(
     builder: &mut ProgramBuilder,
     rng: &mut R,
     funding_txos: &[IndexedVariable],
@@ -567,10 +570,21 @@ fn build_bare_multi_scripts<R: RngCore>(
     // Encoded variants (non-minimal pushes, more than 3 keys) are non-standard, so transactions
     // creating them only confirm in blocks. With `allow_invalid` they may also be unspendable.
     let encoded = rng.gen_bool(0.3);
+    build_bare_multi(builder, rng, encoded, true)
+}
+
+/// Bare multisig scripts, `encoded` with random `m`/`n` encodings and up to 20 keys, or more than
+/// consensus allows if `allow_invalid`.
+fn build_bare_multi<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    encoded: bool,
+    allow_invalid: bool,
+) -> IndexedVariable {
     let n = if encoded {
         match rng.gen_range(0..4) {
             0 => *[3u8, 4, 16, 17, 20].choose(rng).unwrap(),
-            1 => rng.gen_range(21u8..=22),
+            1 if allow_invalid => rng.gen_range(21u8..=22),
             _ => rng.gen_range(1u8..=20),
         }
     } else {
@@ -578,6 +592,11 @@ fn build_bare_multi_scripts<R: RngCore>(
     };
     let required = rng.gen_range(1u8..=n);
     let private_keys: Vec<[u8; 32]> = (0..n).map(|_| gen_secret_key_bytes(rng)).collect();
+    let encoding = if allow_invalid {
+        ScriptIntEncoding::random
+    } else {
+        ScriptIntEncoding::random_valid
+    };
 
     let sighash_flags_var =
         builder.force_append_expect_output(vec![], &Operation::LoadSigHashFlags(1));
@@ -586,8 +605,8 @@ fn build_bare_multi_scripts<R: RngCore>(
         Operation::BuildPayToBareMultiEncoded {
             required,
             private_keys,
-            required_encoding: ScriptIntEncoding::random(rng),
-            key_count_encoding: ScriptIntEncoding::random(rng),
+            required_encoding: encoding(rng),
+            key_count_encoding: encoding(rng),
         }
     } else {
         Operation::BuildPayToBareMulti {

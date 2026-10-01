@@ -5,9 +5,9 @@ use fuzzamoto_ir::{
     AdvanceTimeGenerator, BlockGenerator, BlockTxnGenerator, BloomFilterAddGenerator,
     BloomFilterClearGenerator, BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator,
     CompactFilterQueryGenerator, GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator,
-    InventoryGenerator, LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator,
-    OperationMutator, Program, ReorgBlockGenerator, SendBlockGenerator, SendMessageGenerator,
-    SingleTxGenerator, TipBlockGenerator, TxoGenerator, WitnessGenerator,
+    InventoryGenerator, LargeTxGenerator, LongChainGenerator, NonStandardSpendGenerator,
+    OneParentOneChildGenerator, OperationMutator, Program, ReorgBlockGenerator, SendBlockGenerator,
+    SendMessageGenerator, SingleTxGenerator, TipBlockGenerator, TxoGenerator, WitnessGenerator,
     cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
@@ -325,6 +325,16 @@ where
                 100.0,
                 IrGenerator::new(
                     ReorgBlockGenerator::new(full_program_context.headers.clone()),
+                    rng.clone()
+                )
+            ),
+            (
+                50.0,
+                IrGenerator::new(
+                    NonStandardSpendGenerator::new(
+                        &full_program_context.headers,
+                        full_program_context.txos.clone()
+                    ),
                     rng.clone()
                 )
             ),

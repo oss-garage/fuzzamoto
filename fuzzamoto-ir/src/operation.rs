@@ -34,15 +34,25 @@ pub enum ScriptIntEncoding {
 }
 
 impl ScriptIntEncoding {
-    /// A random encoding, minimal about half of the time.
+    /// A random encoding, minimal about half of the time. Some paddings exceed the `CScriptNum`
+    /// size limit.
     pub fn random<R: RngCore>(rng: &mut R) -> Self {
+        Self::random_with_max_padding(rng, 6)
+    }
+
+    /// Like [`Self::random`], but always a valid number under consensus rules.
+    pub fn random_valid<R: RngCore>(rng: &mut R) -> Self {
+        Self::random_with_max_padding(rng, 4)
+    }
+
+    fn random_with_max_padding<R: RngCore>(rng: &mut R, max_padding: u8) -> Self {
         match rng.gen_range(0..10) {
             0..=4 => ScriptIntEncoding::Minimal,
             5 => ScriptIntEncoding::DirectPush,
             6 => ScriptIntEncoding::PushData1,
             7 => ScriptIntEncoding::PushData2,
             8 => ScriptIntEncoding::PushData4,
-            _ => ScriptIntEncoding::Padded(rng.gen_range(1..=6)),
+            _ => ScriptIntEncoding::Padded(rng.gen_range(1..=max_padding)),
         }
     }
 
