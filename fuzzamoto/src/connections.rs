@@ -8,6 +8,7 @@ use std::net;
 pub enum ConnectionType {
     Inbound,
     Outbound,
+    OutboundReconciliation,
 }
 
 pub trait Transport {
@@ -270,11 +271,15 @@ impl Transport for V2Transport {
     }
 }
 
+/// Salt the harness announces in its `sendtxrcncl` messages.
+pub const HARNESS_RECON_SALT: u64 = 0;
+
 pub struct Connection<T: Transport> {
     connection_type: ConnectionType,
     transport: T,
     ping_counter: u64,
     handshake_complete: bool,
+    target_recon_salt: Option<u64>,
 }
 
 impl<T: Transport> Connection<T> {
@@ -295,12 +300,19 @@ impl<T: Transport> Connection<T> {
             transport,
             ping_counter: 0,
             handshake_complete: false,
+            target_recon_salt: None,
         }
     }
 
     /// Returns whether the version handshake has been completed on this connection.
     pub fn is_handshake_complete(&self) -> bool {
         self.handshake_complete
+    }
+
+    /// Returns the salt the target announced in its `sendtxrcncl` during the version handshake,
+    /// if transaction reconciliation was negotiated on this connection.
+    pub fn target_recon_salt(&self) -> Option<u64> {
+        self.target_recon_salt
     }
 }
 
@@ -396,7 +408,7 @@ impl<T: Transport> Connection<T> {
         version_message.version = 70016; // wtxidrelay version
         version_message.relay = opts.relay;
 
-        if self.connection_type == ConnectionType::Outbound {
+        if self.connection_type != ConnectionType::Inbound {
             loop {
                 let received = self.transport.receive()?;
                 if received.0 == "version" {
@@ -422,21 +434,27 @@ impl<T: Transport> Connection<T> {
         }
         if opts.erlay {
             let version = 1u32;
-            let salt = 0u64;
             let mut bytes = Vec::new();
             version.consensus_encode(&mut bytes).unwrap();
-            salt.consensus_encode(&mut bytes).unwrap();
+            HARNESS_RECON_SALT.consensus_encode(&mut bytes).unwrap();
             self.transport.send(&("sendtxrcncl".to_string(), bytes))?;
         }
 
         // Send verack
         self.transport.send(&("verack".to_string(), vec![]))?;
 
-        // Wait for verack
+        // Wait for verack, remembering the target's reconciliation salt (version u32, salt u64).
+        // The target only registers the link if we offered reconciliation with tx and wtxid relay.
+        let negotiates_recon = opts.erlay && opts.wtxidrelay && opts.relay;
         loop {
             let received = self.transport.receive()?;
             if received.0 == "verack" {
                 break;
+            }
+            if negotiates_recon && received.0 == "sendtxrcncl" && received.1.len() == 12 {
+                self.target_recon_salt = Some(u64::from_le_bytes(
+                    received.1[4..12].try_into().expect("slice has 8 bytes"),
+                ));
             }
         }
 

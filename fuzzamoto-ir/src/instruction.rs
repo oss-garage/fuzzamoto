@@ -28,7 +28,9 @@ impl Instruction {
             | Operation::BeginBuildCoinbaseTx
             | Operation::EndBuildCoinbaseTx
             | Operation::BeginBuildCoinbaseTxOutputs
-            | Operation::EndBuildCoinbaseTxOutputs => false,
+            | Operation::EndBuildCoinbaseTxOutputs
+            | Operation::BeginBuildReconSet
+            | Operation::EndBuildReconSet => false,
             _ => !self.inputs.is_empty(),
         }
     }
@@ -70,7 +72,10 @@ impl Instruction {
             | Operation::BuildPayToTaproot
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
-            | Operation::BuildPayToBareMulti { .. } => true,
+            | Operation::BuildPayToBareMulti { .. }
+            | Operation::AddShortIdToReconSet(_)
+            | Operation::BuildReconSketch { .. }
+            | Operation::BuildReconcilDiff { .. } => true,
             _ => false,
         }
     }
@@ -165,6 +170,10 @@ impl Instruction {
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::BuildPayToBareMulti { .. }
+            | Operation::AddTxToReconSet
+            | Operation::AddShortIdToReconSet(_)
+            | Operation::BuildReconSketch { .. }
+            | Operation::BuildReconcilDiff { .. }
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }
@@ -192,6 +201,8 @@ impl Instruction {
             | Operation::EndBuildCoinbaseTxOutputs
             | Operation::BeginBuildBlockTxn
             | Operation::EndBuildBlockTxn
+            | Operation::BeginBuildReconSet
+            | Operation::EndBuildReconSet
             | Operation::Probe => false,
         }
     }
@@ -217,6 +228,7 @@ impl Instruction {
                     Some(InstructionContext::BuildCoinbaseTxOutputs)
                 }
                 Operation::BeginPrefillTransactions => Some(InstructionContext::BuildPrefill),
+                Operation::BeginBuildReconSet => Some(InstructionContext::ReconSet),
                 _ => unimplemented!("Every block begin enters a context"),
             };
         }
@@ -251,4 +263,5 @@ pub enum InstructionContext {
     BuildCoinbaseTxOutputs,
     BuildBlockTxn,
     BuildPrefill,
+    ReconSet,
 }

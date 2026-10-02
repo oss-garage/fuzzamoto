@@ -4,10 +4,11 @@ use fuzzamoto_ir::{
     AddConnectionGenerator, AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator,
     AdvanceTimeGenerator, BlockGenerator, BlockTxnGenerator, BloomFilterAddGenerator,
     BloomFilterClearGenerator, BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator,
-    CompactFilterQueryGenerator, GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator,
-    InventoryGenerator, LargeTxGenerator, LongChainGenerator, OneParentOneChildGenerator,
-    OperationMutator, Program, ReorgBlockGenerator, SendBlockGenerator, SendMessageGenerator,
-    SingleTxGenerator, TipBlockGenerator, TxoGenerator, WitnessGenerator,
+    CompactFilterQueryGenerator, ErlayExpensiveSketchGenerator, ErlayMessageGenerator,
+    ErlayReconciliationGenerator, GetAddrGenerator, GetDataGenerator, HeaderGenerator,
+    InputMutator, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
+    OneParentOneChildGenerator, OperationMutator, Program, ReorgBlockGenerator, SendBlockGenerator,
+    SendMessageGenerator, SingleTxGenerator, TipBlockGenerator, TxoGenerator, WitnessGenerator,
     cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
@@ -80,6 +81,9 @@ pub struct Instance<'a, EM> {
 }
 
 const AUX_BUFFER_SIZE: usize = 0x20000;
+
+/// Erlay generators only produce useful programs against a target built with the `erlay` feature.
+const ERLAY_WEIGHT: f32 = if cfg!(feature = "erlay") { 1.0 } else { 0.0 };
 
 fn log_weights<MT>(
     options: &FuzzerOptions,
@@ -409,6 +413,28 @@ where
             (
                 50.0,
                 IrGenerator::new(AddConnectionGenerator::inbound(), rng.clone())
+            ),
+            (
+                ERLAY_WEIGHT * 20.0,
+                IrGenerator::new(
+                    AddConnectionGenerator::handshake_outbound_reconciliation(),
+                    rng.clone()
+                )
+            ),
+            (
+                ERLAY_WEIGHT * 100.0,
+                IrGenerator::new(ErlayMessageGenerator, rng.clone())
+            ),
+            (
+                ERLAY_WEIGHT * 10.0,
+                IrGenerator::new(ErlayExpensiveSketchGenerator, rng.clone())
+            ),
+            (
+                ERLAY_WEIGHT * 100.0,
+                IrGenerator::new(
+                    ErlayReconciliationGenerator::new(full_program_context.recon_salts.clone()),
+                    rng.clone()
+                )
             ),
         ];
         log_weights(

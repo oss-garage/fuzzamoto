@@ -238,8 +238,10 @@ impl FuzzerOptions {
                         const DISABLED: &[&str] = &[
                             "AddConnectionGenerator:out:handshake",
                             "AddConnectionGenerator:in:handshake",
+                            "AddConnectionGenerator:out-recon:handshake",
                             "AddConnectionGenerator:out",
                             "AddConnectionGenerator:in",
+                            "ErlayExpensiveSketchGenerator",
                         ];
                         if DISABLED.contains(&name) {
                             0.0
@@ -254,6 +256,7 @@ impl FuzzerOptions {
                             "OperationMutator",
                             "AddConnectionGenerator:out:handshake",
                             "AddConnectionGenerator:in:handshake",
+                            "AddConnectionGenerator:out-recon:handshake",
                             "AddConnectionGenerator:out",
                             "AddConnectionGenerator:in",
                             "AdvanceTimeGenerator",

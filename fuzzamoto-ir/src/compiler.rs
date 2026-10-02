@@ -32,8 +32,12 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use crate::{
     AddrNetwork, AddrRecord, Instruction, Operation, Program, TaprootKeypair, TaprootLeaf,
-    TaprootSpendInfo, bloom::filter_insert, generators::block::Header,
+    TaprootSpendInfo,
+    bloom::filter_insert,
+    generators::block::Header,
+    reconciliation::{ReconKeys, ReconSet},
 };
+use fuzzamoto::connections::HARNESS_RECON_SALT;
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
 /// on a node (i.e. mapping `fuzzamoto_ir::Program` -> `CompiledProgram`).
@@ -519,6 +523,15 @@ impl Compiler {
                 Operation::Probe => {
                     self.handle_probe_operations(instruction);
                 }
+
+                Operation::BeginBuildReconSet
+                | Operation::AddTxToReconSet
+                | Operation::AddShortIdToReconSet(_)
+                | Operation::EndBuildReconSet
+                | Operation::BuildReconSketch { .. }
+                | Operation::BuildReconcilDiff { .. } => {
+                    self.handle_reconciliation_operations(instruction)?;
+                }
             }
 
             // Record the instruction index for each action emitted by this instruction
@@ -633,6 +646,59 @@ impl Compiler {
                 inventory_var.push(inv);
             }
             _ => unreachable!("Non-inventory operation passed to handle_inventory_operations"),
+        }
+        Ok(())
+    }
+
+    fn handle_reconciliation_operations(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<(), CompilerError> {
+        match &instruction.operation {
+            Operation::BeginBuildReconSet => {
+                self.append_variable(ReconSet::default());
+            }
+            Operation::AddTxToReconSet => {
+                let wtxid = self
+                    .get_input::<Tx>(&instruction.inputs, 1)?
+                    .tx
+                    .compute_wtxid()
+                    .to_byte_array();
+                let set_var = self.get_input_mut::<ReconSet>(&instruction.inputs, 0)?;
+                set_var.wtxids.push(wtxid);
+            }
+            Operation::AddShortIdToReconSet(short_id) => {
+                let set_var = self.get_input_mut::<ReconSet>(&instruction.inputs, 0)?;
+                set_var.short_ids.push(*short_id);
+            }
+            Operation::EndBuildReconSet => {
+                let set_var = self.get_input::<ReconSet>(&instruction.inputs, 0)?.clone();
+                self.append_variable(set_var);
+            }
+            Operation::BuildReconSketch {
+                target_salt,
+                first_syndrome,
+                capacity,
+            } => {
+                let keys = ReconKeys::from_salts(HARNESS_RECON_SALT, *target_salt);
+                let payload = self
+                    .get_input::<ReconSet>(&instruction.inputs, 0)?
+                    .sketch_payload(&keys, *first_syndrome, *capacity);
+                self.append_variable(payload);
+            }
+            Operation::BuildReconcilDiff {
+                target_salt,
+                result,
+            } => {
+                let keys = ReconKeys::from_salts(HARNESS_RECON_SALT, *target_salt);
+                let payload = self
+                    .get_input::<ReconSet>(&instruction.inputs, 0)?
+                    .reconcildiff_payload(&keys, *result);
+                self.append_variable(payload);
+            }
+            _ => unreachable!(
+                "Non-reconciliation operation passed to handle_reconciliation_operations"
+            ),
         }
         Ok(())
     }
@@ -2987,5 +3053,84 @@ mod tests {
             num_connections: 1,
             timestamp: 0,
         }
+    }
+
+    #[test]
+    fn compile_recon_set_builds_sketch_and_reconcildiff() {
+        const TARGET_SALT: u64 = 10_393_729_187_455_219_830;
+
+        let mut builder = ProgramBuilder::new(test_context());
+        let conn = builder.force_append_expect_output(vec![], &Operation::LoadConnection(0));
+        let txo = append_op_true_txo(&mut builder, [7u8; 32], 10_000);
+        let tx = build_single_input_transaction(&mut builder, txo.index, 9_000);
+        builder.force_append(vec![conn.index, tx.index], &Operation::SendTx);
+
+        let mut_set = builder.force_append_expect_output(vec![], &Operation::BeginBuildReconSet);
+        builder.force_append(vec![mut_set.index, tx.index], &Operation::AddTxToReconSet);
+        builder.force_append(vec![mut_set.index], &Operation::AddShortIdToReconSet(7));
+        let set =
+            builder.force_append_expect_output(vec![mut_set.index], &Operation::EndBuildReconSet);
+
+        for (command, operation) in [
+            (
+                "sketch",
+                Operation::BuildReconSketch {
+                    target_salt: TARGET_SALT,
+                    first_syndrome: 3,
+                    capacity: 3,
+                },
+            ),
+            (
+                "reconcildiff",
+                Operation::BuildReconcilDiff {
+                    target_salt: TARGET_SALT,
+                    result: 1,
+                },
+            ),
+        ] {
+            let payload = builder.force_append_expect_output(vec![set.index], &operation);
+            let mut msg_type = ['\0'; 12];
+            for (slot, c) in msg_type.iter_mut().zip(command.chars()) {
+                *slot = c;
+            }
+            let msg_type =
+                builder.force_append_expect_output(vec![], &Operation::LoadMsgType(msg_type));
+            builder.force_append(
+                vec![conn.index, msg_type.index, payload.index],
+                &Operation::SendRawMessage,
+            );
+        }
+        let program = builder.finalize().expect("valid program");
+
+        let wtxid = compiled_tx_at(&program, 0).compute_wtxid().to_byte_array();
+        let keys = ReconKeys::from_salts(HARNESS_RECON_SALT, TARGET_SALT);
+        let expected_set = ReconSet {
+            wtxids: vec![wtxid],
+            short_ids: vec![7],
+        };
+
+        let compiled = Compiler::new().compile(&program).expect("program compiles");
+        let payloads: HashMap<&str, &Vec<u8>> = compiled
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                CompiledAction::SendRawMessage(0, command, payload) if command != "tx" => {
+                    Some((command.trim_end_matches('\0'), payload))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            payloads["sketch"],
+            &expected_set.sketch_payload(&keys, 3, 3)
+        );
+        assert_eq!(
+            payloads["reconcildiff"],
+            &expected_set.reconcildiff_payload(&keys, 1)
+        );
+        assert_eq!(
+            payloads["reconcildiff"][2..6],
+            keys.short_id(&wtxid).to_le_bytes()
+        );
     }
 }

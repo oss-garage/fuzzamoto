@@ -8,6 +8,7 @@ use rand::{Rng, RngCore};
 enum ConnectionType {
     Inbound,
     Outbound,
+    OutboundReconciliation,
 }
 
 impl ConnectionType {
@@ -15,6 +16,7 @@ impl ConnectionType {
         match self {
             ConnectionType::Inbound => "inbound",
             ConnectionType::Outbound => "outbound",
+            ConnectionType::OutboundReconciliation => "outbound-full-recon",
         }
     }
 }
@@ -43,6 +45,14 @@ impl AddConnectionGenerator {
         Self {
             handshake: true,
             connection_type: ConnectionType::Inbound,
+        }
+    }
+
+    #[must_use]
+    pub fn handshake_outbound_reconciliation() -> Self {
+        Self {
+            handshake: true,
+            connection_type: ConnectionType::OutboundReconciliation,
         }
     }
 
@@ -111,15 +121,17 @@ impl<R: RngCore> Generator<R> for AddConnectionGenerator {
                 .expect("LoadConnectionType should always produce a var");
 
             if self.handshake {
+                let reconciliation =
+                    matches!(self.connection_type, ConnectionType::OutboundReconciliation);
                 let handshake_opts_var = builder
                     .append(Instruction {
                         inputs: vec![],
                         operation: Operation::LoadHandshakeOpts {
-                            relay: rng.gen_bool(0.5),
+                            relay: reconciliation || rng.gen_bool(0.5),
                             starting_height: rng.gen_range(0..400),
-                            wtxidrelay: rng.gen_bool(0.5),
+                            wtxidrelay: reconciliation || rng.gen_bool(0.5),
                             addrv2: rng.gen_bool(0.5),
-                            erlay: rng.gen_bool(0.5),
+                            erlay: reconciliation || rng.gen_bool(0.5),
                         },
                     })
                     .expect("Inserting LoadHandshakeOpts should always succeed")
@@ -171,8 +183,14 @@ impl<R: RngCore> Generator<R> for AddConnectionGenerator {
         match (self.handshake, self.connection_type) {
             (true, ConnectionType::Outbound) => "AddConnectionGenerator:out:handshake",
             (true, ConnectionType::Inbound) => "AddConnectionGenerator:in:handshake",
+            (true, ConnectionType::OutboundReconciliation) => {
+                "AddConnectionGenerator:out-recon:handshake"
+            }
             (false, ConnectionType::Outbound) => "AddConnectionGenerator:out",
             (false, ConnectionType::Inbound) => "AddConnectionGenerator:in",
+            (false, ConnectionType::OutboundReconciliation) => {
+                unreachable!("Only handshaken reconciliation connections are generated")
+            }
         }
     }
 }
