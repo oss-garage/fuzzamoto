@@ -51,11 +51,9 @@ impl BitcoinCoreTarget {
 
         #[cfg(feature = "inherit_stdout")]
         {
-            config.args.extend_from_slice(&[
-                "-debug",
-                "-debugexclude=libevent",
-                "-debugexclude=leveldb",
-            ]);
+            config
+                .args
+                .extend_from_slice(&["-debug", "-debugexclude=leveldb"]);
             config.view_stdout = true;
         }
         config.args.extend_from_slice(&[
