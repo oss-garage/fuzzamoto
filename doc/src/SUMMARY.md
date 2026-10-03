@@ -7,6 +7,7 @@
 - [Snapshot Fuzzing](./design/snapshot-fuzzing.md)
 - [Scenarios](./design/scenarios.md)
 - [Intermediate Representation](./design/ir.md)
+- [Assertions](./design/assertions.md)
 
 # Usage
 
