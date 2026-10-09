@@ -70,7 +70,8 @@ impl Instruction {
             | Operation::BuildPayToTaproot
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
-            | Operation::BuildPayToBareMulti { .. } => true,
+            | Operation::BuildPayToBareMulti { .. }
+            | Operation::BuildPayToBareMultiEncoded { .. } => true,
             _ => false,
         }
     }
@@ -165,6 +166,7 @@ impl Instruction {
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::BuildPayToBareMulti { .. }
+            | Operation::BuildPayToBareMultiEncoded { .. }
             | Operation::TakeTxo => true,
 
             Operation::Nop { .. }

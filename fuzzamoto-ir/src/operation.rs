@@ -1,5 +1,7 @@
 use crate::{AddrRecord, ProgramValidationError, Variable};
 
+use rand::{Rng, RngCore};
+
 use std::{
     fmt::{self, Write},
     time::Duration,
@@ -12,6 +14,97 @@ pub struct TaprootLeafSpec {
     pub version: u8,
     /// Merkle path from leaf to root (one hash per level).
     pub merkle_path: Vec<[u8; 32]>,
+}
+
+/// How a small integer is pushed onto the stack in a script. Everything but `Minimal` is
+/// non-standard (`SCRIPT_VERIFY_MINIMALDATA`), but valid under consensus rules as long as the number
+/// fits the 4-byte `CScriptNum` limit.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Copy, Hash, PartialEq)]
+pub enum ScriptIntEncoding {
+    /// `OP_0`..`OP_16`, or the shortest direct push for larger values
+    Minimal,
+    /// The minimal number bytes in a direct push, even where `OP_N` would do
+    DirectPush,
+    PushData1,
+    PushData2,
+    PushData4,
+    /// The number zero-extended to this many bytes in a direct push. More than 4 bytes exceeds the
+    /// `CScriptNum` size limit.
+    Padded(u8),
+}
+
+impl ScriptIntEncoding {
+    /// A random encoding, minimal about half of the time. Some paddings exceed the `CScriptNum`
+    /// size limit.
+    pub fn random<R: RngCore>(rng: &mut R) -> Self {
+        Self::random_with_max_padding(rng, 6)
+    }
+
+    /// Like [`Self::random`], but always a valid number under consensus rules.
+    pub fn random_valid<R: RngCore>(rng: &mut R) -> Self {
+        Self::random_with_max_padding(rng, 4)
+    }
+
+    fn random_with_max_padding<R: RngCore>(rng: &mut R, max_padding: u8) -> Self {
+        match rng.gen_range(0..10) {
+            0..=4 => ScriptIntEncoding::Minimal,
+            5 => ScriptIntEncoding::DirectPush,
+            6 => ScriptIntEncoding::PushData1,
+            7 => ScriptIntEncoding::PushData2,
+            8 => ScriptIntEncoding::PushData4,
+            _ => ScriptIntEncoding::Padded(rng.gen_range(1..=max_padding)),
+        }
+    }
+
+    /// Script bytes that push `value` with this encoding.
+    #[must_use]
+    pub fn encode(self, value: u8) -> Vec<u8> {
+        let mut number = match value {
+            0 => vec![],
+            1..=0x7f => vec![value],
+            _ => vec![value, 0x00],
+        };
+        let push = |data: &[u8]| {
+            let mut bytes = vec![u8::try_from(data.len()).expect("pushes here are short")];
+            bytes.extend_from_slice(data);
+            bytes
+        };
+        match self {
+            ScriptIntEncoding::Minimal => match value {
+                0 => vec![0x00],
+                1..=16 => vec![0x50 + value],
+                _ => push(&number),
+            },
+            ScriptIntEncoding::DirectPush => {
+                if number.is_empty() {
+                    // A single zero byte is a non-minimal encoding of zero.
+                    number.push(0x00);
+                }
+                push(&number)
+            }
+            ScriptIntEncoding::PushData1 => {
+                let mut bytes = vec![0x4c, u8::try_from(number.len()).unwrap()];
+                bytes.extend(number);
+                bytes
+            }
+            ScriptIntEncoding::PushData2 => {
+                let mut bytes = vec![0x4d];
+                bytes.extend(u16::try_from(number.len()).unwrap().to_le_bytes());
+                bytes.extend(number);
+                bytes
+            }
+            ScriptIntEncoding::PushData4 => {
+                let mut bytes = vec![0x4e];
+                bytes.extend(u32::try_from(number.len()).unwrap().to_le_bytes());
+                bytes.extend(number);
+                bytes
+            }
+            ScriptIntEncoding::Padded(len) => {
+                number.resize(number.len().max(usize::from(len)), 0x00);
+                push(&number)
+            }
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Hash, PartialEq)]
@@ -220,6 +313,18 @@ pub enum Operation {
     // TODO: SendGetBlockTxn
     // TODO: SendGetBlocks
     // TODO: SendGetHeaders
+
+    // Appended to keep serialized programs compatible
+    /// Bare multisig with explicit encodings for `m` and `n`, allowing non-minimal pushes and key
+    /// counts beyond the standardness limit of 3
+    BuildPayToBareMultiEncoded {
+        /// m-of-n: number of required signatures (1..=n)
+        required: u8,
+        /// Private keys for each pubkey in the script
+        private_keys: Vec<[u8; 32]>,
+        required_encoding: ScriptIntEncoding,
+        key_count_encoding: ScriptIntEncoding,
+    },
 }
 
 impl fmt::Display for Operation {
@@ -237,6 +342,17 @@ impl fmt::Display for Operation {
                     private_keys.len()
                 )
             }
+            Operation::BuildPayToBareMultiEncoded {
+                required,
+                private_keys,
+                required_encoding,
+                key_count_encoding,
+            } => write!(
+                f,
+                "BuildPayToBareMultiEncoded({}-of-{}, m={required_encoding:?}, n={key_count_encoding:?})",
+                required,
+                private_keys.len()
+            ),
             Operation::LoadBytes(bytes) => write!(
                 f,
                 "LoadBytes(\"{}\")",
@@ -596,6 +712,7 @@ impl Operation {
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::BuildPayToBareMulti { .. }
+            | Operation::BuildPayToBareMultiEncoded { .. }
             | Operation::BuildTaprootTree { .. } => false,
         }
     }
@@ -763,6 +880,7 @@ impl Operation {
             | Operation::AddCoinbaseTxOutput
             | Operation::SendBlockTxn
             | Operation::BuildPayToBareMulti { .. }
+            | Operation::BuildPayToBareMultiEncoded { .. }
             | Operation::Probe => false,
         }
     }
@@ -819,7 +937,10 @@ impl Operation {
             Operation::LoadConnectionType(_) => vec![Variable::ConnectionType],
             Operation::LoadDuration(_) => vec![Variable::Duration],
             Operation::LoadAddr(_) => vec![Variable::AddrRecord],
-            Operation::BuildPayToBareMulti { .. } => vec![Variable::Scripts],
+            Operation::BuildPayToBareMulti { .. }
+            | Operation::BuildPayToBareMultiEncoded { .. } => {
+                vec![Variable::Scripts]
+            }
             Operation::LoadBlockHeight(_) => vec![Variable::BlockHeight],
             Operation::LoadCompactFilterType(_) => vec![Variable::CompactFilterType],
             Operation::SendRawMessage => vec![],
@@ -1004,7 +1125,10 @@ impl Operation {
                 Variable::Scripts,
                 Variable::ConstAmount,
             ],
-            Operation::BuildPayToBareMulti { .. } => vec![Variable::SigHashFlags],
+            Operation::BuildPayToBareMulti { .. }
+            | Operation::BuildPayToBareMultiEncoded { .. } => {
+                vec![Variable::SigHashFlags]
+            }
             Operation::TakeTxo => vec![Variable::ConstTx],
             Operation::TakeCoinbaseTxo => vec![Variable::ConstCoinbaseTx],
             Operation::AddWitness => vec![Variable::MutWitnessStack, Variable::Bytes],
@@ -1180,6 +1304,7 @@ impl Operation {
             | Operation::BuildPayToAnchor
             | Operation::BuildPayToTaproot
             | Operation::BuildPayToBareMulti { .. }
+            | Operation::BuildPayToBareMultiEncoded { .. }
             | Operation::BuildPayToPubKey
             | Operation::BuildPayToPubKeyHash
             | Operation::BuildPayToWitnessPubKeyHash
@@ -1258,5 +1383,34 @@ impl Operation {
             | Operation::SendBlockTxn
             | Operation::Probe => vec![],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScriptIntEncoding;
+
+    #[test]
+    fn script_int_encodings() {
+        use ScriptIntEncoding::{DirectPush, Minimal, Padded, PushData1, PushData2, PushData4};
+
+        assert_eq!(Minimal.encode(0), [0x00]);
+        assert_eq!(Minimal.encode(3), [0x53]);
+        assert_eq!(Minimal.encode(16), [0x60]);
+        assert_eq!(Minimal.encode(17), [0x01, 0x11]);
+        // Values with the top bit set need a sign byte.
+        assert_eq!(Minimal.encode(200), [0x02, 0xc8, 0x00]);
+
+        assert_eq!(DirectPush.encode(0), [0x01, 0x00]);
+        assert_eq!(DirectPush.encode(3), [0x01, 0x03]);
+        assert_eq!(PushData1.encode(3), [0x4c, 0x01, 0x03]);
+        assert_eq!(PushData2.encode(3), [0x4d, 0x01, 0x00, 0x03]);
+        assert_eq!(PushData4.encode(3), [0x4e, 0x01, 0x00, 0x00, 0x00, 0x03]);
+        assert_eq!(PushData1.encode(0), [0x4c, 0x00]);
+
+        assert_eq!(Padded(4).encode(3), [0x04, 0x03, 0x00, 0x00, 0x00]);
+        assert_eq!(Padded(5).encode(20), [0x05, 0x14, 0x00, 0x00, 0x00, 0x00]);
+        // Padding never truncates the number.
+        assert_eq!(Padded(1).encode(200), [0x02, 0xc8, 0x00]);
     }
 }

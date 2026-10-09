@@ -3,7 +3,7 @@ use std::time::Duration;
 use super::{Mutator, MutatorResult};
 use crate::PerTestcaseMetadata;
 use crate::{
-    AddrNetwork, AddrRecord, Operation, Program,
+    AddrNetwork, AddrRecord, Operation, Program, ScriptIntEncoding,
     generators::address::{
         MAX_UNKNOWN_ADDR_PAYLOAD, ipv4_to_ipv6_mapped, random_addr_network, random_global_ipv6,
         random_payload_for_network, random_port, random_public_ipv4, random_services, random_time,
@@ -11,6 +11,18 @@ use crate::{
 };
 
 use bitcoin::{NetworkKind, PrivateKey};
+
+/// Two more keys than consensus allows (`MAX_PUBKEYS_PER_MULTISIG`), to also reach the failure.
+const MAX_ENCODED_MULTISIG_KEYS: usize = 22;
+
+fn random_private_key<R: RngCore>(rng: &mut R) -> [u8; 32] {
+    loop {
+        let key: [u8; 32] = rng.r#gen();
+        if PrivateKey::from_slice(&key, NetworkKind::Main).is_ok() {
+            return key;
+        }
+    }
+}
 
 use rand::{
     Rng, RngCore,
@@ -349,6 +361,35 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                 Operation::BuildPayToBareMulti {
                     required: new_required,
                     private_keys: new_keys,
+                }
+            }
+            Operation::BuildPayToBareMultiEncoded {
+                required,
+                private_keys,
+                required_encoding,
+                key_count_encoding,
+            } => {
+                let mut required = *required;
+                let mut private_keys = private_keys.clone();
+                let mut required_encoding = *required_encoding;
+                let mut key_count_encoding = *key_count_encoding;
+                match rng.gen_range(0..4) {
+                    0 => required = rng.gen_range(1..=private_keys.len().max(1)) as u8,
+                    1 => required_encoding = ScriptIntEncoding::random(rng),
+                    2 => key_count_encoding = ScriptIntEncoding::random(rng),
+                    _ => {
+                        if private_keys.len() > 1 && rng.gen_bool(0.5) {
+                            private_keys.remove(rng.gen_range(0..private_keys.len()));
+                        } else if private_keys.len() < MAX_ENCODED_MULTISIG_KEYS {
+                            private_keys.push(random_private_key(rng));
+                        }
+                    }
+                }
+                Operation::BuildPayToBareMultiEncoded {
+                    required,
+                    private_keys,
+                    required_encoding,
+                    key_count_encoding,
                 }
             }
             op => op.clone(),

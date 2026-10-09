@@ -1,19 +1,25 @@
 use crate::{
-    IndexedVariable, Operation, PerTestcaseMetadata, TaprootLeafSpec,
+    IndexedVariable, Operation, PerTestcaseMetadata, ScriptIntEncoding, TaprootLeafSpec,
     generators::{Generator, ProgramBuilder},
 };
 use bitcoin::{
+    ScriptBuf,
     opcodes::{
-        OP_TRUE,
-        all::{OP_CHECKSIG, OP_PUSHNUM_1},
+        OP_0, OP_TRUE,
+        all::{
+            OP_CHECKMULTISIG, OP_CHECKSIG, OP_CODESEPARATOR, OP_DROP, OP_NOT, OP_PUSHDATA2,
+            OP_PUSHNUM_1,
+        },
     },
+    script::PushBytesBuf,
+    secp256k1::{Secp256k1, SecretKey, ecdsa},
     taproot::LeafVersion,
 };
 use rand::{Rng, RngCore, seq::SliceRandom};
 
 use super::{GeneratorError, GeneratorResult};
 
-enum OutputType {
+pub(crate) enum OutputType {
     PayToWitnessScriptHash,
     PayToScriptHash,
     PayToAnchor,
@@ -22,10 +28,16 @@ enum OutputType {
     PayToWitnessPubKeyHash,
     PayToTaproot,
     PayToBareMulti,
+    /// Always non-minimally encoded or above the standard key count, never consensus-invalid
+    PayToEncodedBareMulti,
+    FindAndDelete,
     OpReturn,
 }
 
 fn get_random_output_type<R: RngCore>(rng: &mut R) -> OutputType {
+    if rng.gen_bool(0.05) {
+        return OutputType::FindAndDelete;
+    }
     match rng.gen_range(0..9) {
         0 => OutputType::PayToWitnessScriptHash,
         1 => OutputType::PayToAnchor,
@@ -117,6 +129,8 @@ fn build_outputs<R: RngCore>(
             }
             OutputType::PayToTaproot => build_taproot_scripts(builder, rng),
             OutputType::PayToBareMulti => build_bare_multi_scripts(builder, rng),
+            OutputType::PayToEncodedBareMulti => build_bare_multi(builder, rng, true, false),
+            OutputType::FindAndDelete => build_find_and_delete_scripts(builder, rng),
         };
 
         let amount_var =
@@ -135,7 +149,7 @@ fn build_outputs<R: RngCore>(
     }
 }
 
-fn build_tx<R: RngCore>(
+pub(crate) fn build_tx<R: RngCore>(
     builder: &mut ProgramBuilder,
     rng: &mut R,
     funding_txos: &[IndexedVariable],
@@ -553,19 +567,152 @@ fn build_bare_multi_scripts<R: RngCore>(
     builder: &mut ProgramBuilder,
     rng: &mut R,
 ) -> IndexedVariable {
-    let n = rng.gen_range(1u8..=3u8);
+    // Encoded variants (non-minimal pushes, more than 3 keys) are non-standard, so transactions
+    // creating them only confirm in blocks. With `allow_invalid` they may also be unspendable.
+    let encoded = rng.gen_bool(0.3);
+    build_bare_multi(builder, rng, encoded, true)
+}
+
+/// Bare multisig scripts, `encoded` with random `m`/`n` encodings and up to 20 keys, or more than
+/// consensus allows if `allow_invalid`.
+fn build_bare_multi<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+    encoded: bool,
+    allow_invalid: bool,
+) -> IndexedVariable {
+    let n = if encoded {
+        match rng.gen_range(0..4) {
+            0 => *[3u8, 4, 16, 17, 20].choose(rng).unwrap(),
+            1 if allow_invalid => rng.gen_range(21u8..=22),
+            _ => rng.gen_range(1u8..=20),
+        }
+    } else {
+        rng.gen_range(1u8..=3u8)
+    };
     let required = rng.gen_range(1u8..=n);
     let private_keys: Vec<[u8; 32]> = (0..n).map(|_| gen_secret_key_bytes(rng)).collect();
+    let encoding = if allow_invalid {
+        ScriptIntEncoding::random
+    } else {
+        ScriptIntEncoding::random_valid
+    };
 
     let sighash_flags_var =
         builder.force_append_expect_output(vec![], &Operation::LoadSigHashFlags(1));
 
-    builder.force_append_expect_output(
-        vec![sighash_flags_var.index],
-        &Operation::BuildPayToBareMulti {
+    let operation = if encoded {
+        Operation::BuildPayToBareMultiEncoded {
             required,
             private_keys,
-        },
+            required_encoding: encoding(rng),
+            key_count_encoding: encoding(rng),
+        }
+    } else {
+        Operation::BuildPayToBareMulti {
+            required,
+            private_keys,
+        }
+    };
+    builder.force_append_expect_output(vec![sighash_flags_var.index], &operation)
+}
+
+/// A well-formed DER signature with a sighash byte, which will not verify for any message.
+fn random_der_signature<R: RngCore>(rng: &mut R) -> Vec<u8> {
+    let signature = loop {
+        let mut compact = [0u8; 64];
+        rng.fill_bytes(&mut compact);
+        if let Ok(signature) = ecdsa::Signature::from_compact(&compact) {
+            break signature;
+        }
+    };
+    let mut bytes = signature.serialize_der().to_vec();
+    bytes.push(*[0x01, 0x02, 0x03, 0x81, 0x82, 0x83].choose(rng).unwrap());
+    bytes
+}
+
+/// Legacy scripts in which `OP_CHECKSIG`/`OP_CHECKMULTISIG` find (or narrowly miss) their own
+/// signature in the script code, exercising `FindAndDelete`. The pushed signature is well-formed
+/// but never valid, and `OP_NOT` turns the failed check into success. These are only valid in
+/// blocks: policy rejects any `FindAndDelete` match (`SCRIPT_VERIFY_CONST_SCRIPTCODE`).
+fn build_find_and_delete_scripts<R: RngCore>(
+    builder: &mut ProgramBuilder,
+    rng: &mut R,
+) -> IndexedVariable {
+    let signature = random_der_signature(rng);
+    let public_key = SecretKey::from_slice(&gen_secret_key_bytes(rng))
+        .expect("generated keys are valid")
+        .public_key(&Secp256k1::signing_only())
+        .serialize();
+    let push = |data: &[u8]| {
+        ScriptBuf::builder()
+            .push_slice(PushBytesBuf::try_from(data.to_vec()).expect("short push"))
+            .into_bytes()
+    };
+    let (sig, pk) = (push(&signature), push(&public_key));
+    let checksig_not = [OP_CHECKSIG.to_u8(), OP_NOT.to_u8()];
+
+    let (script_pubkey, script_sig): (Vec<u8>, Vec<u8>) = match rng.gen_range(0..6) {
+        // Found once
+        0 => ([&sig[..], &pk, &checksig_not].concat(), vec![]),
+        // Found by OP_CHECKMULTISIG
+        1 => (
+            [
+                &[OP_0.to_u8()][..],
+                &sig,
+                &[OP_PUSHNUM_1.to_u8()],
+                &pk,
+                &[
+                    OP_PUSHNUM_1.to_u8(),
+                    OP_CHECKMULTISIG.to_u8(),
+                    OP_NOT.to_u8(),
+                ],
+            ]
+            .concat(),
+            vec![],
+        ),
+        // Found twice
+        2 => (
+            [&sig[..], &[OP_DROP.to_u8()], &sig, &pk, &checksig_not].concat(),
+            vec![],
+        ),
+        // The script code starts after the separator, so the signature is not found
+        3 => (
+            [&sig[..], &[OP_CODESEPARATOR.to_u8()], &pk, &checksig_not].concat(),
+            vec![],
+        ),
+        // The signature comes from the scriptSig but is found in the scriptPubKey
+        4 => (
+            [&sig[..], &[OP_DROP.to_u8()], &pk, &checksig_not].concat(),
+            sig.clone(),
+        ),
+        // A non-minimal push of the signature is not matched
+        _ => {
+            let len = u16::try_from(signature.len()).expect("signatures are short");
+            let mut non_minimal = vec![OP_PUSHDATA2.to_u8()];
+            non_minimal.extend(len.to_le_bytes());
+            non_minimal.extend(&signature);
+            ([&non_minimal[..], &pk, &checksig_not].concat(), vec![])
+        }
+    };
+
+    let script_pubkey_var =
+        builder.force_append_expect_output(vec![], &Operation::LoadBytes(script_pubkey));
+    let script_sig_var =
+        builder.force_append_expect_output(vec![], &Operation::LoadBytes(script_sig));
+    let mut_witness_stack_var =
+        builder.force_append_expect_output(vec![], &Operation::BeginWitnessStack);
+    let witness_stack_var = builder.force_append_expect_output(
+        vec![mut_witness_stack_var.index],
+        &Operation::EndWitnessStack,
+    );
+    builder.force_append_expect_output(
+        vec![
+            script_pubkey_var.index,
+            script_sig_var.index,
+            witness_stack_var.index,
+        ],
+        &Operation::BuildRawScripts,
     )
 }
 
@@ -624,4 +771,53 @@ fn random_node_hash<R: RngCore>(rng: &mut R) -> [u8; 32] {
     let mut hash = [0u8; 32];
     rng.fill_bytes(&mut hash);
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{ProgramContext, compiler::Compiler};
+    use bitcoin::script::{Instruction, Script};
+    use rand::{SeedableRng, rngs::SmallRng};
+
+    #[test]
+    fn find_and_delete_scripts_are_well_formed() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let mut shapes = std::collections::HashSet::new();
+        for _ in 0..300 {
+            let mut builder = ProgramBuilder::new(ProgramContext {
+                num_nodes: 1,
+                num_connections: 1,
+                timestamp: 0,
+            });
+            build_find_and_delete_scripts(&mut builder, &mut rng);
+            let program = builder.finalize().expect("valid program");
+            Compiler::new().compile(&program).expect("program compiles");
+
+            let Operation::LoadBytes(script_pubkey) = &program.instructions[0].operation else {
+                panic!("first instruction loads the scriptPubKey");
+            };
+            let Operation::LoadBytes(script_sig) = &program.instructions[1].operation else {
+                panic!("second instruction loads the scriptSig");
+            };
+            assert_eq!(*script_pubkey.last().unwrap(), OP_NOT.to_u8());
+            shapes.insert((
+                script_pubkey[script_pubkey.len() - 2],
+                script_sig.is_empty(),
+            ));
+
+            // Every signature-sized push is a DER signature with a sighash byte, so the spend is
+            // valid under consensus rules (BIP66) even though the signature check fails.
+            for instruction in Script::from_bytes(script_pubkey).instructions() {
+                if let Instruction::PushBytes(data) = instruction.expect("parsable script")
+                    && data.len() > 33
+                {
+                    let (der, _sighash) = data.as_bytes().split_at(data.len() - 1);
+                    ecdsa::Signature::from_der(der).expect("DER signature");
+                }
+            }
+        }
+        // OP_CHECKSIG with and without a scriptSig, and OP_CHECKMULTISIG
+        assert_eq!(shapes.len(), 3);
+    }
 }
