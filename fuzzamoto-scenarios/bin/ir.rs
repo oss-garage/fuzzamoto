@@ -207,11 +207,13 @@ where
         context: ProgramContext,
         txos: Vec<fuzzamoto_ir::Txo>,
         headers: Vec<fuzzamoto_ir::Header>,
+        recon_salts: Vec<Option<u64>>,
     ) -> Result<(), String> {
         let full_context = postcard::to_allocvec(&fuzzamoto_ir::FullProgramContext {
             context,
             txos,
             headers,
+            recon_salts,
         })
         .map_err(|e| e.to_string())?;
 
@@ -285,6 +287,9 @@ where
                     let conn_type = match connection_type.as_str() {
                         "inbound" => fuzzamoto::connections::ConnectionType::Inbound,
                         "outbound" => fuzzamoto::connections::ConnectionType::Outbound,
+                        "outbound-full-recon" => {
+                            fuzzamoto::connections::ConnectionType::OutboundReconciliation
+                        }
                         _ => continue,
                     };
 
@@ -307,6 +312,9 @@ where
                     let conn_type = match connection_type.as_str() {
                         "inbound" => fuzzamoto::connections::ConnectionType::Inbound,
                         "outbound" => fuzzamoto::connections::ConnectionType::Outbound,
+                        "outbound-full-recon" => {
+                            fuzzamoto::connections::ConnectionType::OutboundReconciliation
+                        }
                         _ => continue,
                     };
 
@@ -535,7 +543,13 @@ where
 
         let txos = Self::build_txos(&inner);
         let headers = Self::build_headers(&inner);
-        Self::dump_context(context, txos, headers)?;
+        let recon_salts: Vec<Option<u64>> = inner
+            .connections
+            .iter()
+            .map(fuzzamoto::connections::Connection::target_recon_salt)
+            .collect();
+        log::info!("Target reconciliation salts: {recon_salts:?}");
+        Self::dump_context(context, txos, headers, recon_salts)?;
 
         #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
         let second = Self::create_and_sync_second_target(args, &inner.target)?;
