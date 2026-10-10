@@ -1,3 +1,5 @@
+pub mod assertions;
+
 use regex::bytes::Regex;
 use std::{borrow::Cow, cell::RefCell, fmt::Debug, rc::Rc};
 
