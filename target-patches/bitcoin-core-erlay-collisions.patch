@@ -1,0 +1,28 @@
+diff --git a/src/node/txreconciliation_impl.cpp b/src/node/txreconciliation_impl.cpp
+index 6972dfc..d568a85 100644
+--- a/src/node/txreconciliation_impl.cpp
++++ b/src/node/txreconciliation_impl.cpp
+@@ -18,7 +18,8 @@
+ namespace node {
+ uint32_t TxReconciliationState::ComputeShortID(const Wtxid& wtxid) const
+ {
+-    const uint32_t short_txid = 1 + (m_hasher(wtxid.ToUint256()) % 0xFFFFFFFF);
++    // Fuzzamoto: shrink the short id space so collisions occur in small reconciliation sets.
++    const uint32_t short_txid = 1 + (m_hasher(wtxid.ToUint256()) % 0xFF);
+     return short_txid;
+ }
+ 
+diff --git a/src/node/txreconciliation_impl.h b/src/node/txreconciliation_impl.h
+index 66f1c9e..17df5a6 100644
+--- a/src/node/txreconciliation_impl.h
++++ b/src/node/txreconciliation_impl.h
+@@ -39,7 +39,8 @@ static_assert(RECON_FALSE_POSITIVE_COEF <= 256, "Reducing reconciliation false p
+  * Maximum number of wtxids stored in a peer local set, bounded to protect the memory use of
+  * reconciliation sets and short ids mappings, and CPU used for sketch computation.
+  */
+-inline constexpr size_t MAX_RECONSET_SIZE = 3000;
++// Fuzzamoto: lowered so the reconciliation set limit is reachable in short fuzz inputs.
++inline constexpr size_t MAX_RECONSET_SIZE = 8;
+ 
+ /**
+  * Interval between initiating reconciliations with peers.

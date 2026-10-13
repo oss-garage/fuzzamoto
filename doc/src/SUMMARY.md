@@ -12,6 +12,7 @@
 
 - [Fuzzing with AFL++](./usage/aflpp.md)
 - [Fuzzing with fuzzamoto-libafl](./usage/libafl.md)
+- [Fuzzing Erlay](./usage/erlay.md)
 - [Reproducing Testcases](./usage/reproducing.md)
 - [Custom Target Patches](./usage/target-patches.md)
 - [Coverage Reports](./usage/coverage.md)

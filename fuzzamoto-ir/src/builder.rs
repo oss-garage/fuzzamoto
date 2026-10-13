@@ -268,7 +268,7 @@ impl ProgramBuilder {
             }
 
             Operation::LoadConnectionType(connection_type) => match connection_type.as_str() {
-                "outbound" | "inbound" => {}
+                "outbound" | "inbound" | "outbound-full-recon" => {}
                 _ => {
                     return Err(ProgramValidationError::InvalidConnectionType(
                         connection_type.clone(),

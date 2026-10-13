@@ -9,6 +9,7 @@ repository.workspace = true
 [features]
 fuzz = ["nyx", "reduced_pow"]
 reproduce = ["reduced_pow", "inherit_stdout"]
+erlay = []                                    # Enable PR-specific outbound reconciliation connections
 
 inherit_stdout = []             # Inherit stdout from the fuzz target(s)
 nyx = ["dep:fuzzamoto-nyx-sys"] # Use the nyx runner

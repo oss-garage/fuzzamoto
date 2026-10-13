@@ -8,6 +8,7 @@ pub mod metadata;
 pub mod minimizers;
 pub mod mutators;
 pub mod operation;
+pub mod reconciliation;
 pub mod variable;
 
 use crate::errors::ProgramValidationError;
@@ -62,6 +63,9 @@ pub struct FullProgramContext {
     pub txos: Vec<Txo>,
     /// List of headers present in the snapshotted state
     pub headers: Vec<Header>,
+    /// Transaction reconciliation salt announced by the target on each pre-existing connection,
+    /// indexed like [`Operation::LoadConnection`]. `None` if reconciliation was not negotiated.
+    pub recon_salts: Vec<Option<u64>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq, Hash)]

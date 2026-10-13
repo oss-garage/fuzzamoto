@@ -157,7 +157,7 @@ impl Target<V1Transport> for BitcoinCoreTarget {
 
                 Ok(Connection::new(connection_type, V1Transport { socket }))
             }
-            ConnectionType::Outbound => {
+            ConnectionType::Outbound | ConnectionType::OutboundReconciliation => {
                 let (listener, port) = Self::create_listener()?;
                 self.listeners.push(listener);
                 let listener = self.listeners.last().unwrap();
@@ -169,7 +169,12 @@ impl Target<V1Transport> for BitcoinCoreTarget {
                         "addconnection",
                         &[
                             format!("127.0.0.1:{port}").into(),
-                            "outbound-full-relay".into(),
+                            match connection_type {
+                                ConnectionType::Outbound => "outbound-full-relay",
+                                ConnectionType::OutboundReconciliation => "outbound-full-recon",
+                                ConnectionType::Inbound => unreachable!(),
+                            }
+                            .into(),
                             false.into(), // no v2
                         ],
                     )
@@ -235,7 +240,7 @@ impl Target<V2Transport> for BitcoinCoreTarget {
                     V2Transport::new(socket, bip324::Role::Initiator)?,
                 ))
             }
-            ConnectionType::Outbound => {
+            ConnectionType::Outbound | ConnectionType::OutboundReconciliation => {
                 let (listener, port) = Self::create_listener()?;
                 self.listeners.push(listener);
                 let listener = self.listeners.last().unwrap();
@@ -247,7 +252,12 @@ impl Target<V2Transport> for BitcoinCoreTarget {
                         "addconnection",
                         &[
                             format!("127.0.0.1:{port}").into(),
-                            "outbound-full-relay".into(),
+                            match connection_type {
+                                ConnectionType::Outbound => "outbound-full-relay",
+                                ConnectionType::OutboundReconciliation => "outbound-full-recon",
+                                ConnectionType::Inbound => unreachable!(),
+                            }
+                            .into(),
                             true.into(), // v2
                         ],
                     )

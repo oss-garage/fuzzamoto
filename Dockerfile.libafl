@@ -92,6 +92,13 @@ COPY ./target-patches/bitcoin-core-aggressive-rng.patch bitcoin/
 RUN cd bitcoin/ && \
       git apply bitcoin-core-aggressive-rng.patch
 
+# Optional extra target patch from target-patches/, e.g. for specialized campaigns
+ARG EXTRA_TARGET_PATCH=""
+COPY ./target-patches/ /target-patches/
+RUN if [ -n "${EXTRA_TARGET_PATCH}" ]; then \
+      cd bitcoin/ && git apply "/target-patches/${EXTRA_TARGET_PATCH}"; \
+    fi
+
 RUN cd bitcoin/ && cmake -B build_fuzz \
       --toolchain ./depends/$(./depends/config.guess)/toolchain.cmake \
       -DSANITIZERS="address" \

@@ -70,4 +70,7 @@ pub enum Variable {
 
     TaprootSpendInfo,
     TaprootAnnex,
+
+    MutReconSet,   // Mutable BIP-330 reconciliation set
+    ConstReconSet, // Finalized BIP-330 reconciliation set
 }
