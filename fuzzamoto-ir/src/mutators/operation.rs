@@ -8,6 +8,7 @@ use crate::{
         MAX_UNKNOWN_ADDR_PAYLOAD, ipv4_to_ipv6_mapped, random_addr_network, random_global_ipv6,
         random_payload_for_network, random_port, random_public_ipv4, random_services, random_time,
     },
+    generators::block::{random_header_chain_count, random_header_time_step},
 };
 
 use bitcoin::{NetworkKind, PrivateKey};
@@ -391,6 +392,16 @@ impl<R: RngCore, M: OperationByteMutator> Mutator<R> for OperationMutator<M> {
                     required_encoding,
                     key_count_encoding,
                 }
+            }
+            Operation::SendHeaderChain { count, time_step } => {
+                let mut count = *count;
+                let mut time_step = *time_step;
+                if rng.gen_bool(0.5) {
+                    count = random_header_chain_count(rng);
+                } else {
+                    time_step = random_header_time_step(rng);
+                }
+                Operation::SendHeaderChain { count, time_step }
             }
             op => op.clone(),
         };
