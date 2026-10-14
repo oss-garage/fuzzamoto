@@ -24,6 +24,10 @@ pub trait TargetNode: Sized {
 
     /// Check if the target is still alive.
     fn is_alive(&self) -> Result<(), String>;
+
+    /// Submit a block to the target outside of the p2p interface, bypassing the anti-DoS checks
+    /// applied to unrequested blocks.
+    fn submit_block(&self, block: &Block) -> Result<(), String>;
 }
 
 /// `Target` is the interface that the test harness will use to interact with the target Bitcoin

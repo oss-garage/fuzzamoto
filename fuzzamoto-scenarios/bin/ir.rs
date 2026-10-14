@@ -372,6 +372,12 @@ where
                     self.recording_received_messages = true;
                 }
                 CompiledAction::SetTime(time) => {
+                    // A low-work headers sync aborts the node if the clock is more than two hours
+                    // behind the median time past of the chain it starts from. Headers more than two
+                    // hours ahead of the clock are rejected, so keeping the clock from going
+                    // backwards prevents these false positives.
+                    #[cfg(feature = "min_chain_work")]
+                    let time = time.max(self.futurest).max(self.inner.time);
                     let _ = self.inner.target.set_mocktime(time);
                     #[cfg(any(feature = "oracle_netsplit", feature = "oracle_consensus"))]
                     let _ = self.second.set_mocktime(time);
