@@ -68,6 +68,13 @@ pub struct FuzzerOptions {
 
     #[arg(
         long,
+        help = "Cpu cores on which assertion feedback is enabled",
+        value_parser = Cores::from_cmdline
+    )]
+    pub assertion_cores: Option<Cores>,
+
+    #[arg(
+        long,
         help = "Don't add new inputs to the corpus",
         default_value_t = false
     )]
@@ -219,6 +226,12 @@ impl FuzzerOptions {
         let mut dir = self.output_dir(core_id).clone();
         dir.push("crashes");
         dir
+    }
+
+    pub fn assertion_feedback_enabled(&self, core_id: CoreId) -> bool {
+        self.assertion_cores
+            .as_ref()
+            .is_some_and(|cores| cores.ids.contains(&core_id))
     }
 
     /// Returns the weight for a mutator/generator, or 0.0 if it's disabled

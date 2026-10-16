@@ -22,16 +22,19 @@ use libafl::{
     executors::{Executor, ExitKind, HasObservers},
     feedbacks::MapNoveltiesMetadata,
     inputs::Input,
-    observers::{CanTrack, MapObserver, ObserversTuple},
+    observers::{CanTrack, MapObserver, ObserversTuple, StdOutObserver},
     stages::{Restartable, Stage},
     state::{HasCorpus, HasCurrentTestcase},
 };
-use libafl_bolts::tuples::Handle;
+use libafl_bolts::tuples::{Handle, MatchName, MatchNameRef};
 
+use crate::feedbacks::assertions::{AssertionMetadata, parse_assertions_from_stdout};
 use crate::input::IrInput;
+use fuzzamoto::assertions::AssertionScope;
 
 pub struct IrMinimizerStage<'a, M, T, O> {
     trace_handle: Handle<T>,
+    stdout_handle: Handle<StdOutObserver>,
     consecutive_failures: usize,
     max_consecutive_failures: usize,
     minimizing_crash: bool,
@@ -47,12 +50,14 @@ where
 {
     pub fn new(
         trace_handle: Handle<T>,
+        stdout_handle: Handle<StdOutObserver>,
         max_consecutive_failures: usize,
         minimizing_crash: bool,
         keep_minimizing: &'a RefCell<u64>,
     ) -> Self {
         Self {
             trace_handle,
+            stdout_handle,
             consecutive_failures: 0,
             max_consecutive_failures,
             minimizing_crash,
@@ -80,7 +85,7 @@ where
     E: Executor<EM, IrInput, S, Z> + HasObservers<Observers = OT>,
     EM: EventFirer<IrInput, S>,
     Z: Evaluator<E, EM, IrInput, S> + ExecutesInput<E, EM, IrInput, S>,
-    OT: ObserversTuple<IrInput, S>,
+    OT: ObserversTuple<IrInput, S> + MatchName,
     O: MapObserver,
     T: CanTrack + AsRef<O>,
 {
@@ -102,6 +107,19 @@ where
             .metadata::<MapNoveltiesMetadata>()
             .map(|m| m.list.clone())
             .unwrap_or(vec![]);
+
+        let expected_assertions = state
+            .current_testcase()?
+            .borrow()
+            .metadata::<AssertionMetadata>()
+            .map(|m| m.assertions.clone())
+            .ok();
+
+        let has_assertions = expected_assertions.as_ref().is_some_and(|a| !a.is_empty());
+
+        if !self.minimizing_crash && novelties.is_empty() && !has_assertions {
+            return Ok(());
+        }
 
         let mut success = false;
         let mut current_ir = state.current_input_cloned()?;
@@ -132,13 +150,40 @@ where
                 continue;
             };
 
-            let number_of_retained_novelties = executor.observers()[&self.trace_handle]
-                .as_ref()
-                .how_many_set(&novelties);
-            if (self.minimizing_crash && exit_kind != ExitKind::Ok)
-                || (!self.minimizing_crash && number_of_retained_novelties == novelties.len())
+            // Check coverage novelties are preserved
+            let novelties_preserved = novelties.is_empty() || {
+                let number_of_retained_novelties = executor.observers()[&self.trace_handle]
+                    .as_ref()
+                    .how_many_set(&novelties);
+                number_of_retained_novelties == novelties.len()
+            };
+
+            // Check assertion states are preserved
+            let assertions_preserved = if let Some(expected) = &expected_assertions {
+                let observers = executor.observers();
+                let stdout_observer = observers
+                    .get(&self.stdout_handle)
+                    .expect("StdOutObserver is missing");
+                let observed = stdout_observer
+                    .output
+                    .as_ref()
+                    .map(|buf| parse_assertions_from_stdout(buf))
+                    .unwrap_or_default();
+
+                expected.iter().all(|(msg, exp)| {
+                    observed
+                        .get(msg)
+                        .is_some_and(|obs: &AssertionScope| obs.distance() <= exp.distance())
+                })
+            } else {
+                true
+            };
+
+            let is_crash_preserved = self.minimizing_crash && exit_kind != ExitKind::Ok;
+
+            if is_crash_preserved
+                || (!self.minimizing_crash && novelties_preserved && assertions_preserved)
             {
-                // Minimization still has all the same novelties
                 success = true;
                 current_ir = attempt;
                 minimizer.success();

@@ -1,4 +1,5 @@
 use crate::{
+    assert_sometimes,
     connections::{Connection, ConnectionType, V1Transport, V2Transport},
     targets::{
         GenerateToAddress, HasBlockTemplate, HasGetBlock, HasGetRawMempoolEntries, HasTipInfo,
@@ -129,6 +130,14 @@ Can you-"
         client
             .call::<()>("syncwithvalidationinterfacequeue", &[])
             .map_err(|e| format!("Failed to sync with validation interface queue: {e:?}"))?;
+
+        let mempool_info = self
+            .node
+            .client
+            .get_mempool_info()
+            .map_err(|e| format!("Failed to get mempool info: {e:?}"))?;
+        assert_sometimes!(cond: mempool_info.size > 0, "Mempool is not empty");
+        assert_sometimes!(gt: mempool_info.size, 100, "Mempool has more than 100 transactions");
 
         Ok(())
     }
