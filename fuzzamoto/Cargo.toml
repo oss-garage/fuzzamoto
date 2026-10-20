@@ -14,6 +14,7 @@ inherit_stdout = []             # Inherit stdout from the fuzz target(s)
 nyx = ["dep:fuzzamoto-nyx-sys"] # Use the nyx runner
 reduced_pow = []                # Use reduced POW for block generation
 coverage = []                   # Invokes patched signal handler in bitcoind
+min_chain_work = []             # Raise -minimumchainwork, keeping the target in IBD
 
 [lints]
 workspace = true

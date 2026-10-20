@@ -573,6 +573,105 @@ impl<R: RngCore> Generator<R> for HeaderGenerator {
     }
 }
 
+/// Bitcoin Core's `MAX_HEADERS_RESULTS`. Only `headers` messages of exactly this size make the
+/// node ask for more headers, and only those can start a low-work headers sync.
+pub const MAX_HEADERS_RESULTS: u16 = 2000;
+
+/// Headers sent by all `SendHeaderChain` instructions of a program combined. A low-work headers
+/// sync of a fork from the snapshot tip needs four full messages (presync and redownload), so this
+/// leaves room for one such sync plus a partial second attempt.
+pub const MAX_HEADER_CHAIN_HEADERS_PER_PROGRAM: u32 = 10_000;
+
+/// Number of headers for a `SendHeaderChain`, mostly full messages
+pub fn random_header_chain_count<R: RngCore>(rng: &mut R) -> u16 {
+    match rng.gen_range(0..10) {
+        0 => rng.gen_range(0..MAX_HEADERS_RESULTS),
+        1 => MAX_HEADERS_RESULTS + 1,
+        _ => MAX_HEADERS_RESULTS,
+    }
+}
+
+/// Seconds between consecutive headers of a `SendHeaderChain`, mostly one second
+pub fn random_header_time_step<R: RngCore>(rng: &mut R) -> u16 {
+    match rng.gen_range(0..10) {
+        // Timestamps stop increasing, failing the median-time-past check once validated
+        0 => 0,
+        1 => rng.r#gen(),
+        _ => 1,
+    }
+}
+
+/// `HeaderChainGenerator` sends a long chain of headers over several `headers` messages. When the
+/// chain has less work than the node's anti-DoS threshold (e.g. with a raised `-minimumchainwork`),
+/// this drives a low-work headers sync: the messages are first used for the presync phase, and
+/// sending the same chain again from its start serves the redownload phase.
+pub struct HeaderChainGenerator {
+    headers: Vec<Header>,
+}
+
+impl HeaderChainGenerator {
+    #[must_use]
+    pub fn new(headers: Vec<Header>) -> Self {
+        Self { headers }
+    }
+}
+
+impl<R: RngCore> Generator<R> for HeaderChainGenerator {
+    fn generate(
+        &self,
+        builder: &mut ProgramBuilder,
+        rng: &mut R,
+        _meta: Option<&PerTestcaseMetadata>,
+    ) -> GeneratorResult {
+        let headers_sent: u32 = builder
+            .instructions
+            .iter()
+            .filter_map(|instr| match instr.operation {
+                Operation::SendHeaderChain { count, .. } => Some(u32::from(count)),
+                _ => None,
+            })
+            .sum();
+        if headers_sent >= MAX_HEADER_CHAIN_HEADERS_PER_PROGRAM {
+            return Ok(());
+        }
+
+        let start = match builder.get_random_variable(rng, &Variable::Header) {
+            Some(header_var) if rng.gen_bool(0.5) => header_var.index,
+            _ => load_header(
+                builder,
+                self.headers
+                    .choose(rng)
+                    .ok_or(GeneratorError::MissingVariables)?,
+            ),
+        };
+        let conn_var = builder.get_or_create_random_connection(rng);
+
+        let time_step = random_header_time_step(rng);
+        let counts: Vec<u16> = (0..rng.gen_range(1..=4))
+            .map(|_| random_header_chain_count(rng))
+            .collect();
+
+        let num_sends = if rng.gen_bool(0.5) { 2 } else { 1 };
+        for _ in 0..num_sends {
+            let mut header_var = start;
+            for &count in &counts {
+                header_var = builder
+                    .force_append_expect_output(
+                        vec![conn_var.index, header_var],
+                        &Operation::SendHeaderChain { count, time_step },
+                    )
+                    .index;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn name(&self) -> &'static str {
+        "HeaderChainGenerator"
+    }
+}
+
 #[derive(Default)]
 pub struct SendBlockGenerator;
 

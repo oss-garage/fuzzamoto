@@ -77,6 +77,13 @@ impl BitcoinCoreTarget {
             "-peertimeout=999999999",
             "-noconnect",
         ]);
+        // Every regtest block adds 2 to the chain work, so the snapshot tip at height 200 has
+        // 0x192. A fork from it with one full `headers` message (2000 headers) stays below
+        // 0x138a (the work of height 2500), so it starts a low-work headers sync, and a second
+        // message reaches the threshold and moves the sync into its redownload phase. The node
+        // never reaches this work during setup and stays in IBD.
+        #[cfg(feature = "min_chain_work")]
+        config.args.push("-minimumchainwork=0x138a");
         config
     }
 }
@@ -131,6 +138,22 @@ Can you-"
             .map_err(|e| format!("Failed to sync with validation interface queue: {e:?}"))?;
 
         Ok(())
+    }
+
+    fn submit_block(&self, block: &Block) -> Result<(), String> {
+        let result = self
+            .node
+            .client
+            .call::<serde_json::Value>(
+                "submitblock",
+                &[bitcoin::consensus::encode::serialize_hex(block).into()],
+            )
+            .map_err(|e| format!("Failed to submit block: {e:?}"))?;
+        if result.is_null() {
+            Ok(())
+        } else {
+            Err(format!("Block rejected by submitblock: {result}"))
+        }
     }
 }
 

@@ -18,6 +18,9 @@ compile_in_vm = []
 force_send_and_ping = []
 # Use BIP-324 v2 transport instead of v1
 v2transport = []
+# Raise the target's -minimumchainwork so long header chains trigger a low-work headers sync.
+# The target stays in IBD and ignores transactions, so use this for a dedicated campaign.
+min_chain_work = ["fuzzamoto/min_chain_work"]
 
 # Compile for block template validation
 oracle_blocktemplate = []

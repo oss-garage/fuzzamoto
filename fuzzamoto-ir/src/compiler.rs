@@ -32,7 +32,9 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use crate::{
     AddrNetwork, AddrRecord, Instruction, Operation, Program, ScriptIntEncoding, TaprootKeypair,
-    TaprootLeaf, TaprootSpendInfo, bloom::filter_insert, generators::block::Header,
+    TaprootLeaf, TaprootSpendInfo,
+    bloom::filter_insert,
+    generators::block::{Header, MAX_HEADER_CHAIN_HEADERS_PER_PROGRAM},
 };
 
 /// `Compiler` is responsible for compiling IR into a sequence of low-level actions to be performed
@@ -43,6 +45,8 @@ pub struct Compiler {
     variables: Vec<Box<dyn Any>>,
     output: CompiledProgram,
     connection_counter: usize,
+    /// Headers sent by `SendHeaderChain` so far, capped at `MAX_HEADER_CHAIN_HEADERS_PER_PROGRAM`
+    header_chain_headers: u32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -236,6 +240,20 @@ fn legacy_signature_bytes(signature: &secp256k1::ecdsa::Signature, sighash_flag:
     bytes
 }
 
+/// Grind the header's nonce until it satisfies its own proof-of-work target.
+fn fixup_header_pow(header: &mut bitcoin::block::Header) {
+    if cfg!(feature = "reduced_pow") {
+        while header.block_hash().as_raw_hash()[31] & 0x80 != 0 {
+            header.nonce += 1;
+        }
+    } else {
+        let target = header.target();
+        while header.validate_pow(target).is_err() {
+            header.nonce += 1;
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Txo {
     prev_out: ([u8; 32], u32),
@@ -351,6 +369,7 @@ impl Compiler {
         }
 
         self.connection_counter = ir.context.num_connections;
+        self.header_chain_headers = 0;
 
         for instruction in &ir.instructions {
             let actions_before = self
@@ -504,6 +523,7 @@ impl Compiler {
                 | Operation::SendAddr
                 | Operation::SendAddrV2
                 | Operation::SendHeader
+                | Operation::SendHeaderChain { .. }
                 | Operation::SendBlock
                 | Operation::SendBlockNoWit
                 | Operation::SendGetCFilters
@@ -555,6 +575,7 @@ impl Compiler {
                 metadata: CompiledMetadata::new(),
             },
             connection_counter: 0,
+            header_chain_headers: 0,
         }
     }
 
@@ -1546,6 +1567,50 @@ impl Compiler {
 
                 self.emit_send_raw_message(*connection_var, "headers", data);
             }
+            Operation::SendHeaderChain { count, time_step } => {
+                let connection_var = *self.get_input::<usize>(&instruction.inputs, 0)?;
+                let start = self.get_input::<Header>(&instruction.inputs, 1)?.clone();
+
+                // Spliced programs can accumulate many chains, and validating them dominates the
+                // execution time, so the headers sent per program are capped.
+                let budget =
+                    MAX_HEADER_CHAIN_HEADERS_PER_PROGRAM.saturating_sub(self.header_chain_headers);
+                let count = u16::try_from(u32::from(*count).min(budget))
+                    .expect("Capped count should fit in u16");
+                self.header_chain_headers += u32::from(count);
+
+                let mut data = Vec::new();
+                bitcoin::consensus::encode::VarInt::from(count)
+                    .consensus_encode(&mut data)
+                    .expect("Writing to a vector should not fail");
+
+                let mut prev = start.to_bitcoin_header();
+                for _ in 0..count {
+                    let mut header = bitcoin::block::Header {
+                        version: prev.version,
+                        prev_blockhash: prev.block_hash(),
+                        merkle_root: TxMerkleNode::all_zeros(),
+                        time: prev.time.wrapping_add(u32::from(*time_step)),
+                        bits: prev.bits,
+                        nonce: 0,
+                    };
+                    fixup_header_pow(&mut header);
+                    data.extend(bitcoin::consensus::encode::serialize(&header));
+                    data.push(0); // empty txdata
+                    prev = header;
+                }
+
+                self.emit_send_raw_message(connection_var, "headers", data);
+                self.append_variable(Header {
+                    prev: *prev.prev_blockhash.as_byte_array(),
+                    merkle_root: *prev.merkle_root.as_byte_array(),
+                    nonce: prev.nonce,
+                    bits: prev.bits.to_consensus(),
+                    time: prev.time,
+                    version: prev.version.to_consensus(),
+                    height: start.height + u32::from(count),
+                });
+            }
             Operation::SendBlock | Operation::SendBlockNoWit => {
                 let connection_var = self.get_input::<usize>(&instruction.inputs, 0)?;
                 let block_var = self.get_input::<bitcoin::Block>(&instruction.inputs, 1)?;
@@ -2099,20 +2164,7 @@ impl Compiler {
             txdata,
         };
         fuzzamoto::test_utils::mining::fixup_commitments(&mut block);
-
-        if cfg!(feature = "reduced_pow") {
-            let mut block_hash = block.header.block_hash();
-            while block_hash.as_raw_hash()[31] & 0x80 != 0 {
-                block.header.nonce += 1;
-                block_hash = block.header.block_hash();
-            }
-            // log::info!("{:?} height={}", block_hash, header_var.height);
-        } else {
-            let target = block.header.target();
-            while block.header.validate_pow(target).is_err() {
-                block.header.nonce += 1;
-            }
-        }
+        fixup_header_pow(&mut block.header);
 
         let coinbase_txid = *coinbase_tx_var
             .tx
@@ -3101,6 +3153,156 @@ mod tests {
             secp.verify_ecdsa(&message, &signature.signature, &public_key)
                 .expect("signature verifies against the encoded script");
         }
+    }
+
+    /// Append a `LoadHeader` for the regtest genesis block.
+    fn load_genesis_header(builder: &mut ProgramBuilder) -> IndexedVariable {
+        let genesis =
+            bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
+        builder.force_append_expect_output(
+            vec![],
+            &Operation::LoadHeader {
+                prev: *genesis.prev_blockhash.as_byte_array(),
+                merkle_root: *genesis.merkle_root.as_byte_array(),
+                nonce: genesis.nonce,
+                bits: genesis.bits.to_consensus(),
+                time: genesis.time,
+                version: genesis.version.to_consensus(),
+                height: 0,
+            },
+        )
+    }
+
+    /// Decode the payloads of all `headers` messages in the compiled program.
+    fn compiled_header_chains(program: &Program) -> Vec<Vec<bitcoin::block::Header>> {
+        let compiled = Compiler::new()
+            .compile(program)
+            .expect("failed to compile program");
+        compiled
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                CompiledAction::SendRawMessage(_, command, payload) if command == "headers" => {
+                    let mut reader = payload.as_slice();
+                    let count = bitcoin::consensus::encode::VarInt::consensus_decode(&mut reader)
+                        .expect("header count");
+                    let headers = (0..count.0)
+                        .map(|_| {
+                            let header = bitcoin::block::Header::consensus_decode(&mut reader)
+                                .expect("header");
+                            let tx_count =
+                                bitcoin::consensus::encode::VarInt::consensus_decode(&mut reader)
+                                    .expect("tx count");
+                            assert_eq!(tx_count.0, 0);
+                            header
+                        })
+                        .collect();
+                    assert!(reader.is_empty(), "trailing bytes in headers message");
+                    Some(headers)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn assert_valid_pow(header: &bitcoin::block::Header) {
+        if cfg!(feature = "reduced_pow") {
+            assert_eq!(header.block_hash().as_raw_hash()[31] & 0x80, 0);
+        } else {
+            header
+                .validate_pow(header.target())
+                .expect("header should satisfy its target");
+        }
+    }
+
+    #[test]
+    fn compile_send_header_chain_builds_connected_chain() {
+        let mut builder = ProgramBuilder::new(test_context());
+        let conn = builder.force_append_expect_output(vec![], &Operation::LoadConnection(0));
+        let genesis = load_genesis_header(&mut builder);
+        let tip = builder.force_append_expect_output(
+            vec![conn.index, genesis.index],
+            &Operation::SendHeaderChain {
+                count: 3,
+                time_step: 7,
+            },
+        );
+        // Extending the output header continues the same chain
+        builder.force_append(
+            vec![conn.index, tip.index],
+            &Operation::SendHeaderChain {
+                count: 2,
+                time_step: 7,
+            },
+        );
+        let program = builder.finalize().unwrap();
+
+        let chains = compiled_header_chains(&program);
+        assert_eq!(chains.iter().map(Vec::len).collect::<Vec<_>>(), [3, 2]);
+
+        let genesis =
+            bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
+        let mut prev = genesis;
+        for header in chains.iter().flatten() {
+            assert_eq!(header.prev_blockhash, prev.block_hash());
+            assert_eq!(header.time, prev.time + 7);
+            assert_eq!(header.bits, genesis.bits);
+            assert_eq!(header.version, genesis.version);
+            assert_valid_pow(header);
+            prev = *header;
+        }
+    }
+
+    #[test]
+    fn compile_send_header_chain_resend_is_identical() {
+        let mut builder = ProgramBuilder::new(test_context());
+        let conn = builder.force_append_expect_output(vec![], &Operation::LoadConnection(0));
+        let genesis = load_genesis_header(&mut builder);
+        for _ in 0..2 {
+            builder.force_append(
+                vec![conn.index, genesis.index],
+                &Operation::SendHeaderChain {
+                    count: 5,
+                    time_step: 1,
+                },
+            );
+        }
+        let program = builder.finalize().unwrap();
+
+        let chains = compiled_header_chains(&program);
+        assert_eq!(chains.len(), 2);
+        assert_eq!(chains[0].len(), 5);
+        assert_eq!(chains[0], chains[1]);
+    }
+
+    #[test]
+    fn compile_send_header_chain_caps_headers_per_program() {
+        let mut builder = ProgramBuilder::new(test_context());
+        let conn = builder.force_append_expect_output(vec![], &Operation::LoadConnection(0));
+        let genesis = load_genesis_header(&mut builder);
+        // 3 * 4000 headers exceed the per-program budget of 10,000
+        for _ in 0..3 {
+            builder.force_append(
+                vec![conn.index, genesis.index],
+                &Operation::SendHeaderChain {
+                    count: 4000,
+                    time_step: 1,
+                },
+            );
+        }
+        let program = builder.finalize().unwrap();
+
+        let chains = compiled_header_chains(&program);
+        assert_eq!(
+            chains.iter().map(Vec::len).collect::<Vec<_>>(),
+            [4000, 4000, 2000]
+        );
+        assert_eq!(
+            chains.iter().map(Vec::len).sum::<usize>(),
+            MAX_HEADER_CHAIN_HEADERS_PER_PROGRAM as usize
+        );
+        // The truncated chain is a prefix of the full one
+        assert_eq!(chains[2][..], chains[0][..2000]);
     }
 
     fn test_context() -> ProgramContext {

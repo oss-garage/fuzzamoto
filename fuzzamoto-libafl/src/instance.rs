@@ -4,11 +4,12 @@ use fuzzamoto_ir::{
     AddConnectionGenerator, AddTxToBlockGenerator, AddrRelayGenerator, AddrRelayV2Generator,
     AdvanceTimeGenerator, BlockGenerator, BlockTxnGenerator, BloomFilterAddGenerator,
     BloomFilterClearGenerator, BloomFilterLoadGenerator, CombineMutator, CompactBlockGenerator,
-    CompactFilterQueryGenerator, GetAddrGenerator, GetDataGenerator, HeaderGenerator, InputMutator,
-    InventoryGenerator, LargeTxGenerator, LongChainGenerator, NonStandardSpendGenerator,
-    OneParentOneChildGenerator, OperationMutator, Program, ReorgBlockGenerator, SendBlockGenerator,
-    SendMessageGenerator, SingleTxGenerator, TipBlockGenerator, TxoGenerator, WitnessGenerator,
-    cutting::CuttingMinimizer, instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
+    CompactFilterQueryGenerator, GetAddrGenerator, GetDataGenerator, HeaderChainGenerator,
+    HeaderGenerator, InputMutator, InventoryGenerator, LargeTxGenerator, LongChainGenerator,
+    NonStandardSpendGenerator, OneParentOneChildGenerator, OperationMutator, Program,
+    ReorgBlockGenerator, SendBlockGenerator, SendMessageGenerator, SingleTxGenerator,
+    TipBlockGenerator, TxoGenerator, WitnessGenerator, cutting::CuttingMinimizer,
+    instr_block::InstrBlockMinimizer, nopping::NoppingMinimizer,
 };
 
 use libafl::{
@@ -375,6 +376,13 @@ where
                 50.0,
                 IrGenerator::new(
                     HeaderGenerator::new(full_program_context.headers.clone()),
+                    rng.clone()
+                )
+            ),
+            (
+                10.0,
+                IrGenerator::new(
+                    HeaderChainGenerator::new(full_program_context.headers.clone()),
                     rng.clone()
                 )
             ),
