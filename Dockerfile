@@ -115,6 +115,12 @@ COPY ./fuzzamoto-nyx-sys/Cargo.toml .
 COPY ./fuzzamoto-nyx-sys/src/ src/
 COPY ./fuzzamoto-nyx-sys/build.rs .
 
+# Not used, but still needed for cargo resolution
+WORKDIR /fuzzamoto/fuzzamoto-bedrock-sys
+COPY ./fuzzamoto-bedrock-sys/Cargo.toml .
+COPY ./fuzzamoto-bedrock-sys/src/ src/
+COPY ./fuzzamoto-bedrock-sys/build.rs .
+
 WORKDIR /fuzzamoto/fuzzamoto
 COPY ./fuzzamoto/Cargo.toml .
 COPY ./fuzzamoto/src/ src/
