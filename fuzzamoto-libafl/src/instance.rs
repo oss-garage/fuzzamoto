@@ -41,7 +41,11 @@ use libafl_bolts::{
 
 use std::collections::BTreeMap;
 
+#[cfg(feature = "nyx")]
 use libafl_nyx::{executor::NyxExecutor, helper::NyxHelper, settings::NyxSettings};
+
+#[cfg(feature = "bedrock")]
+use crate::bedrock::{BedrockExecutor, BedrockHelper};
 use rand::{SeedableRng, rngs::SmallRng};
 use typed_builder::TypedBuilder;
 
@@ -79,6 +83,7 @@ pub struct Instance<'a, EM> {
     client_description: ClientDescription,
 }
 
+#[cfg(feature = "nyx")]
 const AUX_BUFFER_SIZE: usize = 0x20000;
 
 fn log_weights<MT>(
@@ -110,6 +115,7 @@ where
         + EventReceiver<IrInput, ClientState>,
 {
     pub fn run(mut self, state: Option<ClientState>) -> Result<(), Error> {
+        #[cfg(feature = "nyx")]
         let parent_cpu_id = self
             .options
             .cores
@@ -118,22 +124,48 @@ where
             .expect("unable to get first core id");
 
         let timeout = Duration::from_millis(u64::from(self.options.timeout));
-        let settings = NyxSettings::builder()
-            .cpu_id(self.client_description.core_id().0)
-            .parent_cpu_id(Some(parent_cpu_id.0))
-            .input_buffer_size(self.options.buffer_size)
-            .aux_buffer_size(AUX_BUFFER_SIZE)
-            .timeout_secs(u8::try_from(timeout.as_secs())?)
-            .timeout_micro_secs(timeout.subsec_micros())
-            .workdir_path(Cow::from(
-                self.options.work_dir().to_str().unwrap().to_string(),
-            ))
-            .build();
 
-        let helper = NyxHelper::new(self.options.shared_dir(), settings)?;
+        #[cfg(feature = "nyx")]
+        let helper = {
+            let settings = NyxSettings::builder()
+                .cpu_id(self.client_description.core_id().0)
+                .parent_cpu_id(Some(parent_cpu_id.0))
+                .input_buffer_size(self.options.buffer_size)
+                .aux_buffer_size(AUX_BUFFER_SIZE)
+                .timeout_secs(u8::try_from(timeout.as_secs())?)
+                .timeout_micro_secs(timeout.subsec_micros())
+                .workdir_path(Cow::from(
+                    self.options.work_dir().to_str().unwrap().to_string(),
+                ))
+                .build();
+            NyxHelper::new(self.options.shared_dir(), settings)?
+        };
+
+        #[cfg(feature = "bedrock")]
+        let mut helper = {
+            let vmlinux = self.options.vmlinux.as_ref().ok_or_else(|| {
+                Error::illegal_argument("--vmlinux is required by the bedrock backend")
+            })?;
+            let initramfs = self.options.initramfs.as_ref().ok_or_else(|| {
+                Error::illegal_argument("--initramfs is required by the bedrock backend")
+            })?;
+            BedrockHelper::new(
+                std::path::Path::new(vmlinux),
+                std::path::Path::new(initramfs),
+                self.options.guest_memory_mb,
+                Duration::from_secs(self.options.setup_timeout),
+                timeout,
+                &self.options.work_dir().join("dump"),
+            )?
+        };
+
+        #[cfg(feature = "nyx")]
+        let (cov_ptr, cov_size) = (helper.bitmap_buffer, helper.bitmap_size);
+        #[cfg(feature = "bedrock")]
+        let (cov_ptr, cov_size) = (helper.coverage_ptr(), helper.coverage_size());
 
         let trace_observer = HitcountsMapObserver::new(unsafe {
-            StdMapObserver::from_mut_ptr("trace", helper.bitmap_buffer, helper.bitmap_size)
+            StdMapObserver::from_mut_ptr("trace", cov_ptr, cov_size)
         })
         .track_indices()
         .track_novelties();
@@ -152,7 +184,7 @@ where
             u32::try_from(self.client_description.core_id().0)
                 .expect("core_id should fit into u32"),
             map_feedback_name.clone(),
-            helper.bitmap_size,
+            cov_size,
             Duration::from_secs(self.options.bench_snapshot_secs()),
             self.options.bench_dir().join(format!(
                 "bench-cpu_{:03}.csv",
@@ -260,7 +292,10 @@ where
         if let Some(rerun_input) = &self.options.rerun_input {
             let input = IrInput::unparse(rerun_input);
 
+            #[cfg(feature = "nyx")]
             let mut executor = NyxExecutor::builder().build(helper, observers);
+            #[cfg(feature = "bedrock")]
+            let mut executor = BedrockExecutor::new(helper, observers);
 
             let exit_kind = executor
                 .run_target(
@@ -275,9 +310,13 @@ where
             process::exit(0);
         }
 
+        #[cfg(feature = "nyx")]
         let mut executor = NyxExecutor::builder()
             .stdout(stdout_observer_handle.clone())
             .build(helper, observers);
+        #[cfg(feature = "bedrock")]
+        let mut executor =
+            BedrockExecutor::new(helper, observers).with_stdout(stdout_observer_handle.clone());
 
         let ir_context_dump = self.options.work_dir().join("dump/ir.context");
         let bytes = std::fs::read(ir_context_dump).expect("Could not read ir context file");

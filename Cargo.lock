@@ -204,6 +204,58 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d965446196e3b7decd44aa7ee49e31d630118f90ef12f97900f262eb915c951d"
 
 [[package]]
+name = "bedrock-ept"
+version = "0.1.0"
+source = "git+https://github.com/Crypt-iQ/bedrock?branch=2026-10%2Fadd-fuzz-hypercall#b25e20bc8269062ac9b0bd406b1048a6f16f1758"
+dependencies = [
+ "bedrock-log",
+ "bedrock-memory",
+]
+
+[[package]]
+name = "bedrock-lab"
+version = "0.1.0"
+source = "git+https://github.com/Crypt-iQ/bedrock?branch=2026-10%2Fadd-fuzz-hypercall#b25e20bc8269062ac9b0bd406b1048a6f16f1758"
+dependencies = [
+ "bedrock-vm",
+]
+
+[[package]]
+name = "bedrock-log"
+version = "0.1.0"
+source = "git+https://github.com/Crypt-iQ/bedrock?branch=2026-10%2Fadd-fuzz-hypercall#b25e20bc8269062ac9b0bd406b1048a6f16f1758"
+
+[[package]]
+name = "bedrock-memory"
+version = "0.1.0"
+source = "git+https://github.com/Crypt-iQ/bedrock?branch=2026-10%2Fadd-fuzz-hypercall#b25e20bc8269062ac9b0bd406b1048a6f16f1758"
+
+[[package]]
+name = "bedrock-vm"
+version = "0.1.0"
+source = "git+https://github.com/Crypt-iQ/bedrock?branch=2026-10%2Fadd-fuzz-hypercall#b25e20bc8269062ac9b0bd406b1048a6f16f1758"
+dependencies = [
+ "bedrock-vmx",
+ "goblin",
+ "libc",
+ "serde",
+ "serde_json",
+ "zerocopy",
+]
+
+[[package]]
+name = "bedrock-vmx"
+version = "0.1.0"
+source = "git+https://github.com/Crypt-iQ/bedrock?branch=2026-10%2Fadd-fuzz-hypercall#b25e20bc8269062ac9b0bd406b1048a6f16f1758"
+dependencies = [
+ "bedrock-ept",
+ "bedrock-log",
+ "bedrock-memory",
+ "serde",
+ "zerocopy",
+]
+
+[[package]]
 name = "bincode"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1247,10 +1299,18 @@ dependencies = [
  "bitcoin_hashes 0.16.0",
  "corepc-node",
  "env_logger",
+ "fuzzamoto-bedrock-sys",
  "fuzzamoto-nyx-sys",
  "log",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fuzzamoto-bedrock-sys"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
@@ -1286,6 +1346,8 @@ name = "fuzzamoto-libafl"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bedrock-lab",
+ "bedrock-vm",
  "clap",
  "env_logger",
  "fuzzamoto",
@@ -1327,6 +1389,7 @@ dependencies = [
  "bitcoin_hashes 0.16.0",
  "env_logger",
  "fuzzamoto",
+ "fuzzamoto-bedrock-sys",
  "fuzzamoto-ir",
  "fuzzamoto-nyx-sys",
  "hex",
@@ -1380,6 +1443,17 @@ name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
+name = "goblin"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daa0a64d21a7eb230583b4c5f4e23b7e4e57974f96620f42a7e75e08ae66d745"
+dependencies = [
+ "log",
+ "plain",
+ "scroll",
+]
 
 [[package]]
 name = "h2"
@@ -2435,6 +2509,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "plain"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
 name = "plotters"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2901,6 +2981,26 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scroll"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ab8598aa408498679922eff7fa985c25d58a90771bd6be794434c5277eab1a6"
+dependencies = [
+ "scroll_derive",
+]
+
+[[package]]
+name = "scroll_derive"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1783eabc414609e28a5ba76aee5ddd52199f7107a0b24c2e9746a1ecc34a683d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
 
 [[package]]
 name = "sdd"

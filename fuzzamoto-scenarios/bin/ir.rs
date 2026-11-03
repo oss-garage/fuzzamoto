@@ -17,10 +17,12 @@ use fuzzamoto::{
     },
 };
 
+#[cfg(feature = "bedrock")]
+use fuzzamoto_bedrock_sys::{bedrock_dump_file_to_host, bedrock_println};
 #[cfg(feature = "nyx")]
 use fuzzamoto_nyx_sys::*;
 use io::Cursor;
-#[cfg(feature = "nyx")]
+#[cfg(any(feature = "nyx", feature = "bedrock"))]
 use std::ffi::CString;
 
 #[cfg(feature = "oracle_inflation")]
@@ -66,11 +68,24 @@ struct IrScenario<TX: Transport, T: Target<TX> + ConnectableTarget> {
     futurest: u64,
 }
 
+/// Send a line to the fuzzer, whichever backend is in use.
+///
+/// The fuzzer reads probe results back out of this stream, so it is part of the
+/// harness ABI rather than mere logging.
 #[cfg(feature = "nyx")]
-pub fn nyx_print(bytes: &[u8]) {
+pub fn agent_print(bytes: &[u8]) {
     if let Ok(message) = CString::new(bytes) {
         unsafe {
             nyx_println(message.as_ptr(), bytes.len());
+        }
+    }
+}
+
+#[cfg(feature = "bedrock")]
+pub fn agent_print(bytes: &[u8]) {
+    if let Ok(message) = CString::new(bytes) {
+        unsafe {
+            bedrock_println(message.as_ptr(), bytes.len());
         }
     }
 }
@@ -220,7 +235,7 @@ where
             const CONTEXT_FILE_NAME: &str = "ir.context";
             unsafe {
                 nyx_dump_file_to_host(
-                    CONTEXT_FILE_NAME.as_ptr() as *const i8,
+                    CONTEXT_FILE_NAME.as_ptr().cast::<i8>(),
                     CONTEXT_FILE_NAME.len(),
                     full_context.as_ptr(),
                     full_context.len(),
@@ -228,7 +243,20 @@ where
             }
         }
 
-        #[cfg(not(feature = "nyx"))]
+        #[cfg(feature = "bedrock")]
+        {
+            const CONTEXT_FILE_NAME: &str = "ir.context";
+            unsafe {
+                bedrock_dump_file_to_host(
+                    CONTEXT_FILE_NAME.as_ptr().cast::<i8>(),
+                    CONTEXT_FILE_NAME.len(),
+                    full_context.as_ptr(),
+                    full_context.len(),
+                );
+            }
+        }
+
+        #[cfg(not(any(feature = "nyx", feature = "bedrock")))]
         if let Ok(context_file) = std::env::var("DUMP_CONTEXT") {
             std::fs::write(context_file, &full_context).map_err(|e| e.to_string())?;
         }
@@ -384,12 +412,12 @@ where
     }
 
     fn print_received(&mut self) {
-        #[cfg(feature = "nyx")]
+        #[cfg(any(feature = "nyx", feature = "bedrock"))]
         if !self.probe_results.is_empty()
             && let Ok(bytes) = postcard::to_allocvec(&self.probe_results)
         {
             use base64::prelude::{BASE64_STANDARD, Engine};
-            nyx_print(BASE64_STANDARD.encode(&bytes).as_bytes());
+            agent_print(BASE64_STANDARD.encode(&bytes).as_bytes());
         }
         self.probe_results.clear();
     }
