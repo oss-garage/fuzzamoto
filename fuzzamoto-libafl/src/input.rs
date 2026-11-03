@@ -66,10 +66,10 @@ impl HasTargetBytes for IrInput {
             let mut bytes =
                 postcard::to_allocvec(self.ir()).expect("serialization should never fail");
             log::trace!("Input size: {}", bytes.len());
-            if bytes.len() > 1 * 1024 * 1024 {
+            if bytes.len() > 1024 * 1024 {
                 bytes = Vec::new();
             }
-            return OwnedSlice::from(bytes);
+            OwnedSlice::from(bytes)
         }
     }
 }
