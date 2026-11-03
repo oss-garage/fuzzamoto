@@ -8,11 +8,13 @@ repository.workspace = true
 
 [features]
 fuzz = ["compile_in_vm", "force_send_and_ping", "nyx"]
+fuzz_bedrock = ["compile_in_vm", "force_send_and_ping", "bedrock"]
 reproduce = ["compile_in_vm", "force_send_and_ping", "fuzzamoto/reproduce"]
 coverage = ["fuzzamoto/coverage"]
 nyx_log = ["nyx"]
 
 nyx = ["dep:fuzzamoto-nyx-sys"]
+bedrock = ["dep:fuzzamoto-bedrock-sys", "fuzzamoto/bedrock"]
 compile_in_vm = []
 # Force every sent message to be followed by two ping/pong roundtrips
 force_send_and_ping = []
@@ -36,6 +38,7 @@ workspace = true
 fuzzamoto = { path = "../fuzzamoto" }
 fuzzamoto-ir = { path = "../fuzzamoto-ir" }
 fuzzamoto-nyx-sys = { path = "../fuzzamoto-nyx-sys", optional = true }
+fuzzamoto-bedrock-sys = { path = "../fuzzamoto-bedrock-sys", optional = true }
 
 bitcoin = "0.32.0"
 bitcoin_hashes = "0.16.0"
