@@ -32,7 +32,22 @@ jobs:
       run: cargo fmt --all --check
     - name: Install cargo hack
       run: cargo install cargo-hack
-    - name: Run test for all features
-      run: cargo hack test --workspace --each-feature
+    - name: Run test for each feature (nyx)
+      run: |
+        cargo hack test --workspace --exclude fuzzamoto-libafl --each-feature --exclude-features bedrock,fuzz_bedrock
+        cargo hack test -p fuzzamoto-libafl --each-feature --features nyx --exclude-features bedrock,fuzz_bedrock
+    - name: Run test for each feature (bedrock)
+      run: cargo hack test -p fuzzamoto -p fuzzamoto-scenarios -p fuzzamoto-libafl --each-feature --features bedrock --exclude-features nyx,fuzz,nyx_log,default
+    - name: Run test for all features (nyx, then bedrock)
+      run: |
+        feats() { cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; p,skip=sys.argv[1],sys.argv[2].split(","); print(",".join(f for k in json.load(sys.stdin)["packages"] if k["name"]==p for f in k["features"] if f not in skip))' "$1" "$2"; }
+        for p in $(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(*(k["name"] for k in json.load(sys.stdin)["packages"]))'); do
+          cargo test -p "$p" --features "$(feats "$p" bedrock,fuzz_bedrock)"
+        done
+        for p in fuzzamoto fuzzamoto-scenarios fuzzamoto-libafl; do
+          cargo test -p "$p" --no-default-features --features "$(feats "$p" nyx,fuzz,nyx_log,default)"
+        done
     - name: Run cargo clippy
-      run: cargo clippy # maybe --no-deps? should add it if we see problems in the future
+      run: |
+        cargo clippy # maybe --no-deps? should add it if we see problems in the future
+        cargo clippy -p fuzzamoto -p fuzzamoto-scenarios -p fuzzamoto-libafl --no-default-features --features bedrock
