@@ -2,7 +2,7 @@ FROM debian:bookworm
 
 # ------ Build and install dependencies ------
 
-ARG LLVM_V=19
+ARG LLVM_V=23
 ARG SANITIZER=asan
 ENV SANITIZER=${SANITIZER}
 
@@ -54,9 +54,10 @@ WORKDIR /
 # Clone AFLplusplus and build
 ENV LLVM_CONFIG=llvm-config-${LLVM_V}
 RUN git clone https://github.com/AFLplusplus/AFLplusplus
+RUN cd AFLplusplus && git checkout 0dd29ae632ff06a4bc3df40c23e6b676a0129996
 RUN cd AFLplusplus && make PERFORMANCE=1 -j$(nproc --ignore 1)
 
-ARG LLVM_RELEASE=llvmorg-19.1.7
+ARG LLVM_RELEASE=llvmorg-23.1.5
 RUN set -e; \
     case "${SANITIZER}" in \
       asan)  echo 'CORE_SANITIZERS=address' > /san-flags.sh ;; \

@@ -2,7 +2,7 @@ FROM debian:bookworm
 
 # ------ Coverage for fuzzamoto ------
 
-ARG LLVM_V=19
+ARG LLVM_V=23
 
 # Add the LLVM apt repo
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg lsb-release software-properties-common wget && \
