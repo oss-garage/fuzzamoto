@@ -7,8 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["std"]
+default = ["std", "nyx"]
 std = []
+
+nyx = ["dep:libafl_nyx"]
 
 fuzz = ["compile_in_vm"]
 reproduce = ["compile_in_vm"]
@@ -22,6 +24,9 @@ simplemgr = []
 compile_in_vm = []
 
 introspection = ["libafl/introspection"]
+
+bedrock = ["dep:bedrock-lab", "dep:bedrock-vm", "compile_in_vm"]
+fuzz_bedrock = ["bedrock"]
 
 # Collect stats for benchmarking purposes
 bench = []
@@ -48,7 +53,11 @@ libafl = { git = "https://github.com/AFLplusplus/LibAFL.git", rev = "3b21190452d
 libafl_bolts = { git = "https://github.com/AFLplusplus/LibAFL.git", rev = "3b21190452d7289535aee443799ea55d940915c5", features = [
   "errors_backtrace",
 ] }
-libafl_nyx = { git = "https://github.com/AFLplusplus/LibAFL.git", rev = "3b21190452d7289535aee443799ea55d940915c5" }
+libafl_nyx = { git = "https://github.com/AFLplusplus/LibAFL.git", rev = "3b21190452d7289535aee443799ea55d940915c5", optional = true }
+
+# TODO: This should be pinned to bedrock master, not my branch.
+bedrock-lab = { git = "https://github.com/Crypt-iQ/bedrock", branch = "2026-10/add-fuzz-hypercall", optional = true }
+bedrock-vm = { git = "https://github.com/Crypt-iQ/bedrock", branch = "2026-10/add-fuzz-hypercall", optional = true }
 
 log = { version = "0.4.20" }
 nix = { version = "0.30.1", features = ["fs"] }
