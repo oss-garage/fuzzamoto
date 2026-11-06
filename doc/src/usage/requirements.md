@@ -9,15 +9,11 @@ required. At least 32GB of RAM are recommended.
 
 Fuzzamoto has been tested on the following hardware:
 
-`Hetzner AX 102`:
-
-- AMD Ryzen 9 7950X3D 16-Core Processor
-- 128GB RAM
-
-`Intel machine`:
-
-- 13th Gen Intel(R) Core(TM) i9-13900K
-- 128GB RAM
+- AMD Ryzen 9 7950X3D 16-Core Processor 128GB RAM
+- 13th Gen Intel(R) Core(TM) i9-13900K 128GB RAM
+- Intel(R) Core(TM) i7-7700 CPU 64GB RAM
+- Intel(R) Core(TM) i7-6700 CPU 64GB RAM
+- Intel(R) Xeon(R) Silver 4310 CPU 256GB RAM
 
 *If you have a machine that you've successfully fuzzed with Fuzzamoto, please
 share it with us, so we can refine the system requirements!*
