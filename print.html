@@ -666,7 +666,7 @@ BITCOIND_PATH=/bitcoin/build_fuzz/bin/bitcoind cargo build --workspace --release
 </code></pre>
 <p>Then, build the crash handler and initialize the nyx share dir:</p>
 <pre><code># Build the crash handler
-clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
+clang-&lt;version&gt; -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
     ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
 # Initialize the nyx share dir
 ./target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-ir \
@@ -743,7 +743,7 @@ BITCOIND_PATH=/bitcoin/build_fuzz/bin/bitcoind cargo build --workspace --release
 more verbose logs from <code>bitcoind</code>.</p>
 <p>Then, build the crash handler and initialize the nyx share dir as usual:</p>
 <pre><code># Build the crash handler
-clang-19 -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
+clang-&lt;version&gt; -fPIC -DENABLE_NYX -D_GNU_SOURCE -DNO_PT_NYX \
     ./fuzzamoto-nyx-sys/src/nyx-crash-handler.c -ldl -I. -shared -o libnyx_crash_handler.so
 # Initialize the nyx share dir
 ./target/release/fuzzamoto-cli init --sharedir /tmp/fuzzamoto_scenario-ir \
