@@ -2,7 +2,7 @@ FROM debian:bookworm
 
 # ------ Build and install dependencies ------
 
-ARG LLVM_V=19
+ARG LLVM_V=23
 
 # Add the LLVM apt repo
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg lsb-release software-properties-common wget && \
@@ -55,6 +55,7 @@ RUN mkdir -p /root/.config/tmux/ && \
 # Clone AFLplusplus, build with Nyx support, and install
 ENV LLVM_CONFIG=llvm-config-${LLVM_V}
 RUN git clone https://github.com/AFLplusplus/AFLplusplus
+RUN cd AFLplusplus && git checkout 0dd29ae632ff06a4bc3df40c23e6b676a0129996
 RUN cd AFLplusplus/nyx_mode/ && ./build_nyx_support.sh
 RUN cd AFLplusplus && make PERFORMANCE=1 install -j$(nproc --ignore 1)
 
