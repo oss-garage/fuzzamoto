@@ -161,19 +161,23 @@ where
             .as_ref()
             .ok_or(libafl::Error::illegal_state("StdOutObserver has no stdout"))?;
         if !buffer.is_empty() {
-            let chunks: Vec<Vec<u8>> = buffer.split(|b| *b == b'\n').map(<[u8]>::to_vec).collect();
-
-            for chunk in chunks {
-                if chunk.is_empty() {
+            let stdout = String::from_utf8_lossy(buffer);
+            for line in stdout.lines() {
+                let trimmed = line.trim().trim_matches(|c| c == '\0');
+                if trimmed.is_empty() {
                     continue;
                 }
 
-                if let Ok(decoded) = BASE64_STANDARD.decode(&chunk)
-                    && let Ok(results) = postcard::from_bytes::<ProbeResults>(&decoded)
+                if let Ok(fuzzamoto::StdoutMessage::Probe(data)) =
+                    serde_json::from_str::<fuzzamoto::StdoutMessage>(trimmed)
                 {
-                    process_probe_results(state, &results);
-                } else {
-                    log::info!("Failed to decode the message from the target!");
+                    if let Ok(decoded) = BASE64_STANDARD.decode(&data)
+                        && let Ok(results) = postcard::from_bytes::<ProbeResults>(&decoded)
+                    {
+                        process_probe_results(state, &results);
+                    } else {
+                        log::info!("Failed to decode probe data from the target!");
+                    }
                 }
             }
         }
