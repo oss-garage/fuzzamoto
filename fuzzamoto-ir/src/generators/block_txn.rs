@@ -15,25 +15,25 @@ impl<R: RngCore> Generator<R> for BlockTxnGenerator {
         rng: &mut R,
         meta: Option<&PerTestcaseMetadata>,
     ) -> GeneratorResult {
-        if let Some(meta) = meta
-            && !meta.block_txn_request().is_empty()
-        {
-            let insertion_point = builder.instructions.len();
-            assert_eq!(
-                builder
-                    .instructions
-                    .get(insertion_point - 1)
-                    .expect("The insertion point should exist")
-                    .operation,
-                Operation::SendCompactBlock
-            );
-            let blocktxn_req = meta.block_txn_request();
-            let choice = blocktxn_req
+        // Recorded requests are cached per corpus entry and can go stale relative to the program
+        // being built: a minimizer can shrink/renumber the IR in place after it was probed, the
+        // triggering `SendCompactBlock` can be replaced or nopped, or `choose_index` may have fallen
+        // back to a random insertion point. Only use a request that was triggered by the
+        // instruction right before the insertion point and whose connection/block variables still
+        // exist; otherwise fall back to the random path below instead of panicking.
+        let insertion_point = builder.instructions.len();
+        let request = meta.and_then(|meta| {
+            let matching: Vec<_> = meta
+                .block_txn_request()
                 .iter()
-                .position(|x| x.triggering_instruction_index == insertion_point - 1)
-                .expect("Triggering instruction not found");
+                .filter(|r| r.triggering_instruction_index + 1 == insertion_point)
+                .filter(|r| Self::request_is_valid(builder, r.connection_index, r.block_variable))
+                .collect();
+            (!matching.is_empty()).then(|| matching[rng.gen_range(0..matching.len())])
+        });
 
-            let block_variable = blocktxn_req[choice].block_variable;
+        if let Some(request) = request {
+            let block_variable = request.block_variable;
 
             // Resolve the block-level positions to tx variable indices. get_block_vars returns
             // the non-coinbase tx var indices in block order (index 0 = block position 1).
@@ -50,7 +50,7 @@ impl<R: RngCore> Generator<R> for BlockTxnGenerator {
                 .pop()
                 .expect("BeginBuildBlockTxn should always produce a var");
 
-            for &block_pos in &blocktxn_req[choice].tx_indices_variables {
+            for &block_pos in &request.tx_indices_variables {
                 // tx_var_indices[0] = block position 1 (first non-coinbase tx), so subtract 1.
                 // block_pos 0 (coinbase) has no entry; checked_sub(1) returns None and is skipped.
                 let Some(&tx_var) = block_pos.checked_sub(1).and_then(|i| tx_var_indices.get(i))
@@ -74,7 +74,7 @@ impl<R: RngCore> Generator<R> for BlockTxnGenerator {
                 .pop()
                 .expect("EndBuildBlockTxn should always produce a var");
 
-            let connection = blocktxn_req[choice].connection_index;
+            let connection = request.connection_index;
             builder
                 .append(Instruction {
                     inputs: vec![connection, block_txn.index],
@@ -138,17 +138,23 @@ impl<R: RngCore> Generator<R> for BlockTxnGenerator {
         rng: &mut R,
         meta: Option<&PerTestcaseMetadata>,
     ) -> Option<usize> {
-        if let Some(meta) = meta
-            && !meta.block_txn_request().is_empty()
-        {
-            let blocktxn_req = meta.block_txn_request();
-            let choice = rng.gen_range(0..blocktxn_req.len());
-            let insertion_point = blocktxn_req[choice].triggering_instruction_index + 1;
-            Some(insertion_point)
-        } else {
-            program
-                .get_random_instruction_index(rng, &<Self as Generator<R>>::requested_context(self))
+        if let Some(meta) = meta {
+            // A `triggering_instruction_index` recorded against a different (e.g. since
+            // minimized/replaced) version of this corpus entry's program can point past its
+            // current end; `index <= program.instructions.len()` is exactly what makes the
+            // `instructions[..index]` slice in `IrGenerator::mutate` safe.
+            let valid: Vec<usize> = meta
+                .block_txn_request()
+                .iter()
+                .map(|r| r.triggering_instruction_index + 1)
+                .filter(|&index| index <= program.instructions.len())
+                .collect();
+            if !valid.is_empty() {
+                return Some(valid[rng.gen_range(0..valid.len())]);
+            }
         }
+
+        program.get_random_instruction_index(rng, &<Self as Generator<R>>::requested_context(self))
     }
 }
 
@@ -156,5 +162,16 @@ impl BlockTxnGenerator {
     #[must_use]
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Whether `connection_index`/`block_variable` still refer to a connection/block that exists
+    /// and is in scope in `builder`.
+    fn request_is_valid(
+        builder: &ProgramBuilder,
+        connection_index: usize,
+        block_variable: usize,
+    ) -> bool {
+        matches!(builder.get_variable(connection_index), Some(v) if v.var == Variable::Connection)
+            && matches!(builder.get_variable(block_variable), Some(v) if v.var == Variable::Block)
     }
 }
