@@ -475,6 +475,21 @@ impl HasTxOutSetInfo for BitcoinCoreTarget {
 
 impl HasBlockTemplate for BitcoinCoreTarget {
     fn block_template(&self) -> Result<(), String> {
+        // A mocktime behind the chain's MTP makes any template "time-too-new" and reports a false
+        // positive.
+        if let Ok(info) = self
+            .node
+            .client
+            .call::<serde_json::Value>("getblockchaininfo", &[])
+            && let Some(mtp) = info["mediantime"].as_u64()
+            && self.time < mtp + 1
+        {
+            let _ = self
+                .node
+                .client
+                .call::<()>("setmocktime", &[(mtp + 1).into()]);
+        }
+
         // After calling getblocktemplate, the peer will call BlockAssembler::CreateNewBlock(), and the node in turn calls TestBlockValidity for us
         // so we just need to check if the returned result
         let v = serde_json::json!({"mode": "template", "capabilities": ["coinbasetxn", "workid", "coinbase/append"], "rules": ["segwit"]});
