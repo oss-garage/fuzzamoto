@@ -71,7 +71,8 @@ impl Instruction {
             | Operation::TaprootScriptsUseAnnex
             | Operation::TaprootTxoUseAnnex
             | Operation::BuildPayToBareMulti { .. }
-            | Operation::BuildPayToBareMultiEncoded { .. } => true,
+            | Operation::BuildPayToBareMultiEncoded { .. }
+            | Operation::SendHeaderChain { .. } => true,
             _ => false,
         }
     }
@@ -152,6 +153,7 @@ impl Instruction {
             | Operation::SendAddr
             | Operation::SendAddrV2
             | Operation::SendHeader
+            | Operation::SendHeaderChain { .. }
             | Operation::SendBlock
             | Operation::SendBlockNoWit
             | Operation::SendGetCFilters

@@ -687,7 +687,7 @@ mod tests {
         }
     }
 
-    /// Asserts that VariableLookup and ProgramBuilder produce identical variable state
+    /// Asserts that `VariableLookup` and `ProgramBuilder` produce identical variable state
     /// for the given slice of instructions.
     fn assert_lookup_matches_builder(instructions: &[Instruction], context: &ProgramContext) {
         // Allow invalid programs (unclosed scopes) since we're testing partial slices
@@ -716,7 +716,7 @@ mod tests {
         }
     }
 
-    /// Asserts that get_random_variable returns the same candidates from both implementations.
+    /// Asserts that `get_random_variable` returns the same candidates from both implementations.
     fn assert_random_variable_candidates_match(
         instructions: &[Instruction],
         context: &ProgramContext,
@@ -742,8 +742,7 @@ mod tests {
 
         assert_eq!(
             builder_candidates, lookup_candidates,
-            "Random variable candidates mismatch for {:?}",
-            find
+            "Random variable candidates mismatch for {find:?}"
         );
     }
 
@@ -968,7 +967,7 @@ mod tests {
         builder.force_append(vec![], &Operation::LoadLockTime(0)); // LockTime
         builder.force_append(vec![], &Operation::LoadConnection(0)); // Connection
         builder.force_append(vec![], &Operation::LoadNode(0)); // Node
-        builder.force_append(vec![], &Operation::LoadSequence(0xFFFFFFFF)); // Sequence
+        builder.force_append(vec![], &Operation::LoadSequence(0xFFFF_FFFF)); // Sequence
 
         // Enter scope with BeginBuildTx (requires TxVersion and LockTime)
         builder.force_append(vec![1, 2], &Operation::BeginBuildTx); // MutTx (inner)
