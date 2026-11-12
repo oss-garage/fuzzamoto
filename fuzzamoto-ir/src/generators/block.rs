@@ -104,6 +104,7 @@ fn build_block_from_header<R: RngCore>(
     rng: &mut R,
     header_var_index: usize,
     meta: Option<&PerTestcaseMetadata>,
+    send: bool,
 ) -> Result<(IndexedVariable, IndexedVariable), GeneratorError> {
     let time_var = builder
         .get_random_variable(rng, &Variable::Time)
@@ -120,10 +121,13 @@ fn build_block_from_header<R: RngCore>(
         time_var.index,
         &tx_vars,
         meta,
+        send,
     )
 }
 
-/// Build a block on `header_var_index` containing exactly `tx_vars` (in order) and send it.
+/// Build a block on `header_var_index` containing exactly `tx_vars` (in order) and, if `send`,
+/// send its header and block.
+#[allow(clippy::too_many_arguments)]
 fn build_block_with_txs<R: RngCore>(
     coinbase_generator: &CoinbaseTxGenerator,
     builder: &mut ProgramBuilder,
@@ -132,6 +136,7 @@ fn build_block_with_txs<R: RngCore>(
     time_var_index: usize,
     tx_vars: &[usize],
     meta: Option<&PerTestcaseMetadata>,
+    send: bool,
 ) -> Result<(IndexedVariable, IndexedVariable), GeneratorError> {
     let begin_txs_var =
         builder.force_append_expect_output(vec![], &Operation::BeginBlockTransactions);
@@ -169,15 +174,17 @@ fn build_block_with_txs<R: RngCore>(
         })
         .expect("Buildblock should not fail");
 
-    let conn_var = builder.get_or_create_random_connection(rng);
-    builder.force_append(
-        vec![conn_var.index, block_and_header_var[0].index],
-        &Operation::SendHeader,
-    );
-    builder.force_append(
-        vec![conn_var.index, block_and_header_var[1].index],
-        &Operation::SendBlock,
-    );
+    if send {
+        let conn_var = builder.get_or_create_random_connection(rng);
+        builder.force_append(
+            vec![conn_var.index, block_and_header_var[0].index],
+            &Operation::SendHeader,
+        );
+        builder.force_append(
+            vec![conn_var.index, block_and_header_var[1].index],
+            &Operation::SendBlock,
+        );
+    }
     builder.force_append(
         vec![block_and_header_var[2].index],
         &Operation::TakeCoinbaseTxo,
@@ -209,6 +216,7 @@ impl<R: RngCore> Generator<R> for BlockGenerator {
             rng,
             header_var.index,
             meta,
+            true,
         )?;
 
         Ok(())
@@ -245,8 +253,14 @@ impl<R: RngCore> Generator<R> for TipBlockGenerator {
             return Ok(());
         };
 
-        let (_header, _block) =
-            build_block_from_header(&self.coinbase_generator, builder, rng, header_var, meta)?;
+        let (_header, _block) = build_block_from_header(
+            &self.coinbase_generator,
+            builder,
+            rng,
+            header_var,
+            meta,
+            true,
+        )?;
         Ok(())
     }
 
@@ -397,6 +411,7 @@ impl<R: RngCore> Generator<R> for NonStandardSpendGenerator {
             time_var.index,
             &[funding_tx.index, spending_tx.index],
             meta,
+            true,
         )?;
         Ok(())
     }
@@ -445,10 +460,29 @@ impl<R: RngCore> Generator<R> for ReorgBlockGenerator {
             return Ok(());
         };
 
+        // Build the whole branch first, then send all headers before any block. Unrequested
+        // blocks with less work than the active tip are dropped by the node, so the headers must
+        // make the branch the best chain (triggering getdata) before the blocks arrive.
+        let mut branch = Vec::new();
         for _ in 0..length {
-            let (new_header, _) =
-                build_block_from_header(&self.coinbase_generator, builder, rng, header_var, meta)?;
+            let (new_header, new_block) = build_block_from_header(
+                &self.coinbase_generator,
+                builder,
+                rng,
+                header_var,
+                meta,
+                false,
+            )?;
             header_var = new_header.index;
+            branch.push((new_header, new_block));
+        }
+
+        let conn_var = builder.get_or_create_random_connection(rng);
+        for (header, _) in &branch {
+            builder.force_append(vec![conn_var.index, header.index], &Operation::SendHeader);
+        }
+        for (_, block) in &branch {
+            builder.force_append(vec![conn_var.index, block.index], &Operation::SendBlock);
         }
 
         Ok(())
