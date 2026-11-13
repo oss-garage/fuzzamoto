@@ -339,6 +339,10 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>BeginBuildBlockTxn</code></td><td align="left">Begins building a blocktxn message after sending a compact block.</td></tr>
 <tr><td align="left"><code>AddTxToBlockTxn</code></td><td align="left">Adds a transaction to the blocktxn message.</td></tr>
 <tr><td align="left"><code>EndBuildBlockTxn</code></td><td align="left">Finishes building a blocktxn message.</td></tr>
+<tr><td align="left"><strong>Getblocktxn building</strong></td><td align="left"><strong>Construct a BIP152 getblocktxn request (compact block reconstruction side).</strong></td></tr>
+<tr><td align="left"><code>BeginBuildGetBlockTxn</code></td><td align="left">Begins building a getblocktxn request for a block the node announced via <code>cmpctblock</code>.</td></tr>
+<tr><td align="left"><code>AddIndexToGetBlockTxn</code></td><td align="left">Adds a block-level transaction index to the request.</td></tr>
+<tr><td align="left"><code>EndBuildGetBlockTxn</code></td><td align="left">Finishes building a getblocktxn request.</td></tr>
 <tr><td align="left"><strong>Filter building</strong></td><td align="left"><strong>Construct a BIP37 filter.</strong></td></tr>
 <tr><td align="left"><code>BeginBuildFilterLoad</code></td><td align="left">Begins building a filter.</td></tr>
 <tr><td align="left"><code>AddTxToFilter</code></td><td align="left">Adds a transaction to a filter.</td></tr>
@@ -384,9 +388,10 @@ containing the correctly serialized transactions <code>v15</code> and <code>v30<
 <tr><td align="left"><code>SendGetCFCheckpt</code></td><td align="left">Sends a <code>getcfcheckpt</code> message.</td></tr>
 <tr><td align="left"><code>SendCompactBlock</code></td><td align="left">Sends a <code>cmpctblock</code> message.</td></tr>
 <tr><td align="left"><code>SendBlockTxn</code></td><td align="left">Sends a <code>blocktxn</code> message.</td></tr>
+<tr><td align="left"><code>SendGetBlockTxn</code></td><td align="left">Sends a <code>getblocktxn</code> message.</td></tr>
 <tr><td align="left"><strong>Other</strong></td><td align="left"></td></tr>
 <tr><td align="left"><code>Nop</code></td><td align="left">No operation. Used during minimization.</td></tr>
-<tr><td align="left"><code>Probe</code></td><td align="left">Tells the scenario to probe state for the fuzzer (e.g. received messages, tip hash, ...).</td></tr>
+<tr><td align="left"><code>Probe</code></td><td align="left">Tells the scenario to probe state for the fuzzer (e.g. received messages, tip hash, ...). See <a href="#probe-driven-feedback-loop">Probe-driven feedback loop</a>.</td></tr>
 </tbody></table>
 <h3 id="mutators"><a class="header" href="#mutators">Mutators</a></h3>
 <p>Several mutation strategies are available for IR programs:</p>
@@ -420,11 +425,43 @@ instructions</li>
 block</li>
 <li><code>CompactBlockGenerator</code>: Generates instructions to build and send a compact
 block for an existing block, with a randomly chosen prefill transaction list</li>
+<li><code>BlockTxnGenerator</code>: Generates instructions to build and send a <code>blocktxn</code>
+message in response to a <code>getblocktxn</code> the node sent us (recorded by the probe)</li>
+<li><code>GetCompactBlockGenerator</code>: Generates a <code>getdata(MSG_CMPCT_BLOCK)</code> to actively
+fetch a compact block for a block the node announced via <code>headers</code>/<code>inv</code>
+(BIP152 low bandwidth path)</li>
+<li><code>GetBlockTxnGenerator</code>: Generates a <code>getblocktxn</code> request for a block. Since
+<code>net_processing</code> serves a <code>getblocktxn</code> for any block it has (a <code>blocktxn</code>
+within <code>MAX_BLOCKTXN_DEPTH</code> of the tip, the full block beyond that) without
+requiring a prior <code>cmpctblock</code>, the target can be any block in the program.
+When the probe recorded a <code>cmpctblock</code> the node announced to us, the generator
+also responds to it directly, simulating the compact block reconstruction
+side. Requested indexes are either <em>faithful</em> (the transactions a peer with an
+empty mempool could not reconstruct, i.e. the non-prefilled positions) or
+<em>adversarial</em> (an arbitrary, possibly out-of-range set to exercise the node's
+validation and <code>blocktxn</code> response path)</li>
 <li><code>OneParentOneChildGenerator</code>: Generates instructions for building two new
 transactions (a 1-parent 1-child package) and sending them to a node</li>
 <li>... see
 <a href="https://github.com/dergoegge/fuzzamoto/tree/master/fuzzamoto-ir/src/generators/">generators/</a></li>
 </ul>
+<h3 id="probe-driven-feedback-loop"><a class="header" href="#probe-driven-feedback-loop">Probe-driven feedback loop</a></h3>
+<p>Some p2p flows can only be exercised in response to a message the node sends
+<em>us</em>. For example, the node accepts a <code>getblocktxn</code> for any block it has, but a
+request that mirrors real compact block reconstruction (asking for exactly the
+transactions the node did not prefill) needs the <code>cmpctblock</code> the node
+announced, and that announcement is itself triggered by a new block arriving on
+a <em>different</em> connection — the program cannot know the prefilled positions
+ahead of time.</p>
+<p>To handle this, <code>IrScenario</code> supports a <code>Probe</code> operation. When present, the
+scenario records selected messages received from the node during execution,
+decodes them, and reports them back to the fuzzer (the
+<a href="https://github.com/oss-garage/fuzzamoto/tree/master/fuzzamoto-libafl/src/stages/probe.rs">probing stage</a>
+prepends <code>Probe</code> to a testcase and runs it once). The decoded observations
+(e.g. &quot;the node sent a <code>getblocktxn</code>/<code>cmpctblock</code>/block announcement, triggered
+by instruction N, on connection C&quot;) are stored as per-testcase metadata.
+Generators then use that metadata to insert the appropriate response right after
+the instruction that triggered it.</p>
 <h3 id="minimizers"><a class="header" href="#minimizers">Minimizers</a></h3>
 <p>Minimizers are used to reduce the size of an interesting program (e.g. bug or
 new coverage). The following minimization strategies are available:</p>
