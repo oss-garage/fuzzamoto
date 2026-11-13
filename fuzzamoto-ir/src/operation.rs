@@ -734,10 +734,7 @@ impl Operation {
 
     #[must_use]
     pub fn allow_insertion_in_block(&self) -> bool {
-        if self.is_block_begin() {
-            return false;
-        }
-        true
+        !self.is_block_begin()
     }
 
     #[must_use]
