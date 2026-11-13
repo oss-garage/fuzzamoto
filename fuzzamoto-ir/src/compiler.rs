@@ -199,7 +199,7 @@ enum SigningRequest {
     Taproot {
         spend_info_var: Option<usize>,
         selected_leaf: Option<TaprootLeaf>,
-        annex_var: Option<usize>,
+        signing_annex: Option<usize>,
     },
 }
 
@@ -890,17 +890,13 @@ impl Compiler {
                     .ok_or(CompilerError::IncorrectNumberOfInputs)?;
                 self.get_input::<Vec<u8>>(&instruction.inputs, 1)?;
 
-                match &mut scripts.requires_signing {
-                    Some(SigningRequest::Taproot {
-                        annex_var: target, ..
-                    }) => {
-                        *target = Some(annex_var);
-                    }
-                    _ => {
-                        return Err(CompilerError::MiscError(
-                            "TaprootScriptsUseAnnex requires a taproot script".to_string(),
-                        ));
-                    }
+                // Mutations may give us a non-taproot input so just continue if so.
+                if let Some(SigningRequest::Taproot {
+                    signing_annex: target,
+                    ..
+                }) = &mut scripts.requires_signing
+                {
+                    *target = Some(annex_var);
                 }
 
                 self.append_variable(scripts);
@@ -914,17 +910,13 @@ impl Compiler {
                     .ok_or(CompilerError::IncorrectNumberOfInputs)?;
                 self.get_input::<Vec<u8>>(&instruction.inputs, 1)?;
 
-                match &mut txo.scripts.requires_signing {
-                    Some(SigningRequest::Taproot {
-                        annex_var: target, ..
-                    }) => {
-                        *target = Some(annex_var);
-                    }
-                    _ => {
-                        return Err(CompilerError::MiscError(
-                            "TaprootTxoUseAnnex requires a taproot script".to_string(),
-                        ));
-                    }
+                // Mutations may give us a non-taproot input so just continue if so.
+                if let Some(SigningRequest::Taproot {
+                    signing_annex: target,
+                    ..
+                }) = &mut txo.scripts.requires_signing
+                {
+                    *target = Some(annex_var);
                 }
 
                 self.append_variable(txo);
@@ -1179,7 +1171,7 @@ impl Compiler {
                     requires_signing: Some(SigningRequest::Taproot {
                         spend_info_var,
                         selected_leaf,
-                        annex_var: None,
+                        signing_annex: None,
                     }),
                 });
             }
@@ -2377,7 +2369,7 @@ impl Compiler {
                     SigningRequest::Taproot {
                         spend_info_var,
                         selected_leaf,
-                        annex_var,
+                        signing_annex,
                     } => {
                         let spend_info = if let Some(var) = spend_info_var {
                             self.get_variable::<TaprootSpendInfo>(*var).unwrap().clone()
@@ -2387,7 +2379,7 @@ impl Compiler {
                             ));
                         };
 
-                        let annex_bytes = if let Some(var) = annex_var {
+                        let annex_bytes = if let Some(var) = signing_annex {
                             let annex = self.get_variable::<Vec<u8>>(*var).map_err(|_| {
                                 CompilerError::MiscError(
                                     "taproot annex variable missing".to_string(),
@@ -2939,6 +2931,130 @@ mod tests {
         builder.force_append(vec![connection.index, tx.index], &Operation::SendTx);
 
         builder.finalize().expect("valid program")
+    }
+
+    fn assert_compiles_with_untouched_witness(program: &Program, send_tx_index: usize) {
+        let tx = compiled_tx_at(program, send_tx_index);
+        // The spent output is OP_TRUE / P2A, so no annex must have been appended.
+        assert!(
+            tx.input[0]
+                .witness
+                .last()
+                .is_none_or(|elem| elem.first() != Some(&0x50)),
+            "annex must not be attached to a non-taproot spend"
+        );
+    }
+
+    #[test]
+    fn taproot_txo_use_annex_on_non_taproot_txo_is_ignored() {
+        // Equivalent to `InputMutator` swapping the Txo input of `TaprootTxoUseAnnex` for a
+        // non-taproot Txo (here: the OP_TRUE funding txo at index 1).
+        let mut program = build_annex_program(vec![0x50, 0x01]);
+        let annex_instr = program
+            .instructions
+            .iter_mut()
+            .find(|i| matches!(i.operation, Operation::TaprootTxoUseAnnex))
+            .unwrap();
+        annex_instr.inputs[0] = 1;
+        assert!(program.is_statically_valid());
+
+        assert_compiles_with_untouched_witness(&program, 1);
+    }
+
+    #[test]
+    fn nopped_take_txo_shifting_annex_onto_non_taproot_output_is_ignored() {
+        // `build_tx` emits one `TakeTxo` per output and attaches an annex to the taproot ones.
+        // `TakeTxo` picks outputs positionally, so nopping an earlier `TakeTxo` (as the nopping
+        // minimizer/mutator may do) makes the annex'd `TakeTxo` select a non-taproot output.
+        let mut builder = ProgramBuilder::new(test_context());
+        let connection = builder.force_append_expect_output(vec![], &Operation::LoadConnection(0));
+        let funding_txo = append_op_true_txo(&mut builder, [0x44; 32], 100_000);
+
+        let tx_version = builder.force_append_expect_output(vec![], &Operation::LoadTxVersion(2));
+        let lock_time = builder.force_append_expect_output(vec![], &Operation::LoadLockTime(0));
+        let mut_tx = builder.force_append_expect_output(
+            vec![tx_version.index, lock_time.index],
+            &Operation::BeginBuildTx,
+        );
+        let mut_inputs = builder.force_append_expect_output(vec![], &Operation::BeginBuildTxInputs);
+        let sequence =
+            builder.force_append_expect_output(vec![], &Operation::LoadSequence(0xffff_fffe));
+        builder.force_append(
+            vec![mut_inputs.index, funding_txo.index, sequence.index],
+            &Operation::AddTxInput,
+        );
+        let inputs = builder
+            .force_append_expect_output(vec![mut_inputs.index], &Operation::EndBuildTxInputs);
+        let mut_outputs =
+            builder.force_append_expect_output(vec![inputs.index], &Operation::BeginBuildTxOutputs);
+        // Output 0: P2A, output 1: P2TR.
+        let anchor = builder.force_append_expect_output(vec![], &Operation::BuildPayToAnchor);
+        let amount = builder.force_append_expect_output(vec![], &Operation::LoadAmount(40_000));
+        builder.force_append(
+            vec![mut_outputs.index, anchor.index, amount.index],
+            &Operation::AddTxOutput,
+        );
+        let spend_info = builder.force_append_expect_output(
+            vec![],
+            &Operation::BuildTaprootTree {
+                secret_key: [7u8; 32],
+                script_leaf: None,
+            },
+        );
+        let taproot = builder
+            .force_append_expect_output(vec![spend_info.index], &Operation::BuildPayToTaproot);
+        builder.force_append(
+            vec![mut_outputs.index, taproot.index, amount.index],
+            &Operation::AddTxOutput,
+        );
+        let outputs = builder
+            .force_append_expect_output(vec![mut_outputs.index], &Operation::EndBuildTxOutputs);
+        let parent = builder.force_append_expect_output(
+            vec![mut_tx.index, inputs.index, outputs.index],
+            &Operation::EndBuildTx,
+        );
+
+        let first_take =
+            builder.force_append_expect_output(vec![parent.index], &Operation::TakeTxo);
+        let second_take =
+            builder.force_append_expect_output(vec![parent.index], &Operation::TakeTxo);
+        let annex = builder.force_append_expect_output(
+            vec![],
+            &Operation::LoadTaprootAnnex {
+                annex: vec![0x50, 0x02],
+            },
+        );
+        let spend_txo = builder.force_append_expect_output(
+            vec![second_take.index, annex.index],
+            &Operation::TaprootTxoUseAnnex,
+        );
+        let child = build_single_input_transaction(&mut builder, spend_txo.index, 39_000);
+        builder.force_append(vec![connection.index, parent.index], &Operation::SendTx);
+        builder.force_append(vec![connection.index, child.index], &Operation::SendTx);
+        let mut program = builder.finalize().expect("valid program");
+
+        // Sanity check: the unmutated program compiles.
+        compiled_tx_at(&program, 1);
+
+        program.instructions[first_take.index].nop();
+        assert!(program.is_statically_valid());
+
+        assert_compiles_with_untouched_witness(&program, 1);
+    }
+
+    #[test]
+    fn taproot_scripts_use_annex_on_non_taproot_scripts_is_ignored() {
+        let mut builder = ProgramBuilder::new(test_context());
+        let annex = builder
+            .force_append_expect_output(vec![], &Operation::LoadTaprootAnnex { annex: vec![0x50] });
+        let anchor = builder.force_append_expect_output(vec![], &Operation::BuildPayToAnchor);
+        builder.force_append_expect_output(
+            vec![anchor.index, annex.index],
+            &Operation::TaprootScriptsUseAnnex,
+        );
+        let program = builder.finalize().expect("valid program");
+
+        Compiler::new().compile(&program).expect("program compiles");
     }
 
     fn compiled_tx_at(program: &Program, send_tx_index: usize) -> Transaction {
