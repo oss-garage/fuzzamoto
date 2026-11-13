@@ -58,8 +58,14 @@ impl Iterator for InstrBlockMinimizer {
         };
 
         // Replace the whole block with nop operations
-        for i in block_begin..=block_end {
-            self.current.instructions[i].nop();
+        for instr in self
+            .current
+            .instructions
+            .iter_mut()
+            .take(block_end + 1)
+            .skip(block_begin)
+        {
+            instr.nop();
         }
 
         Some(self.current.clone())

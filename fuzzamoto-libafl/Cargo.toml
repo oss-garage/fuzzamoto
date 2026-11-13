@@ -29,16 +29,6 @@ bench = []
 [lints]
 workspace = true
 
-[build-dependencies]
-vergen = { version = "8.2.1", features = [
-  "build",
-  "cargo",
-  "git",
-  "gitcl",
-  "rustc",
-  "si",
-] }
-
 [dependencies]
 clap = { version = "4.5.18", features = ["derive", "string", "env"] }
 
