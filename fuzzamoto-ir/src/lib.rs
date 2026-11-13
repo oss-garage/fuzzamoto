@@ -329,10 +329,46 @@ pub struct GetBlockTxn {
     pub tx_indices_variables: Vec<usize>,
 }
 
+/// A `cmpctblock` message the node under test announced to us (BIP152). Captured so that a
+/// generator can simulate the compact block reconstruction side and respond with a `getblocktxn`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CompactBlockAnnouncement {
+    /// Variable index of the connection the `cmpctblock` was received on
+    pub connection_index: usize,
+    /// Index of the instruction that triggered the node to send the `cmpctblock`
+    pub triggering_instruction_index: usize,
+    /// Variable index of the block the compact block refers to
+    pub block_variable: usize,
+    /// Total number of transactions in the block (prefilled + short ids)
+    pub num_block_txs: usize,
+    /// Block-level positions (0 = coinbase) that the node prefilled in the `cmpctblock`. A faithful
+    /// reconstruction is missing exactly the positions that are *not* in this list.
+    pub prefilled_indexes: Vec<usize>,
+}
+
+/// A block announcement (`headers` or `inv`) the node under test sent us. Captured so that a
+/// generator can actively fetch the compact block via `getdata(MSG_CMPCT_BLOCK)` (BIP152 low
+/// bandwidth mode).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockAnnouncement {
+    /// Variable index of the connection the announcement was received on
+    pub connection_index: usize,
+    /// Index of the instruction that triggered the node to announce the block
+    pub triggering_instruction_index: usize,
+    /// Variable index of the announced block
+    pub block_variable: usize,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum ProbeResult {
     GetBlockTxn {
         get_block_txn: GetBlockTxn,
+    },
+    CompactBlock {
+        announcement: CompactBlockAnnouncement,
+    },
+    BlockAnnounced {
+        announcement: BlockAnnouncement,
     },
     Failure {
         /// The command that failed to be decoded

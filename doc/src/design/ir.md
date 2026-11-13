@@ -213,6 +213,10 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `BeginBuildBlockTxn` | Begins building a blocktxn message after sending a compact block. |
 | `AddTxToBlockTxn` | Adds a transaction to the blocktxn message. |
 | `EndBuildBlockTxn` | Finishes building a blocktxn message. |
+| **Getblocktxn building** | **Construct a BIP152 getblocktxn request (compact block reconstruction side).**|
+| `BeginBuildGetBlockTxn` | Begins building a getblocktxn request for a block the node announced via `cmpctblock`. |
+| `AddIndexToGetBlockTxn` | Adds a block-level transaction index to the request. |
+| `EndBuildGetBlockTxn` | Finishes building a getblocktxn request. |
 | **Filter building** | **Construct a BIP37 filter.** |
 | `BeginBuildFilterLoad` | Begins building a filter. |
 | `AddTxToFilter` | Adds a transaction to a filter. |
@@ -258,9 +262,10 @@ containing the correctly serialized transactions `v15` and `v30`.
 | `SendGetCFCheckpt`| Sends a `getcfcheckpt` message. |
 | `SendCompactBlock` | Sends a `cmpctblock` message. |
 | `SendBlockTxn` | Sends a `blocktxn` message. |
+| `SendGetBlockTxn` | Sends a `getblocktxn` message. |
 | **Other** | |
 | `Nop` | No operation. Used during minimization. |
-| `Probe` | Tells the scenario to probe state for the fuzzer (e.g. received messages, tip hash, ...). |
+| `Probe` | Tells the scenario to probe state for the fuzzer (e.g. received messages, tip hash, ...). See [Probe-driven feedback loop](#probe-driven-feedback-loop). |
 
 ### Mutators
 
@@ -295,10 +300,45 @@ fuzzing campaign. The following generators are available:
   block
 - `CompactBlockGenerator`: Generates instructions to build and send a compact
   block for an existing block, with a randomly chosen prefill transaction list
+- `BlockTxnGenerator`: Generates instructions to build and send a `blocktxn`
+  message in response to a `getblocktxn` the node sent us (recorded by the probe)
+- `GetCompactBlockGenerator`: Generates a `getdata(MSG_CMPCT_BLOCK)` to actively
+  fetch a compact block for a block the node announced via `headers`/`inv`
+  (BIP152 low bandwidth path)
+- `GetBlockTxnGenerator`: Generates a `getblocktxn` request for a block. Since
+  `net_processing` serves a `getblocktxn` for any block it has (a `blocktxn`
+  within `MAX_BLOCKTXN_DEPTH` of the tip, the full block beyond that) without
+  requiring a prior `cmpctblock`, the target can be any block in the program.
+  When the probe recorded a `cmpctblock` the node announced to us, the generator
+  also responds to it directly, simulating the compact block reconstruction
+  side. Requested indexes are either *faithful* (the transactions a peer with an
+  empty mempool could not reconstruct, i.e. the non-prefilled positions) or
+  *adversarial* (an arbitrary, possibly out-of-range set to exercise the node's
+  validation and `blocktxn` response path)
 - `OneParentOneChildGenerator`: Generates instructions for building two new
   transactions (a 1-parent 1-child package) and sending them to a node
 - ... see
   [generators/](https://github.com/dergoegge/fuzzamoto/tree/master/fuzzamoto-ir/src/generators/)
+
+### Probe-driven feedback loop
+
+Some p2p flows can only be exercised in response to a message the node sends
+*us*. For example, the node accepts a `getblocktxn` for any block it has, but a
+request that mirrors real compact block reconstruction (asking for exactly the
+transactions the node did not prefill) needs the `cmpctblock` the node
+announced, and that announcement is itself triggered by a new block arriving on
+a *different* connection — the program cannot know the prefilled positions
+ahead of time.
+
+To handle this, `IrScenario` supports a `Probe` operation. When present, the
+scenario records selected messages received from the node during execution,
+decodes them, and reports them back to the fuzzer (the
+[probing stage](https://github.com/oss-garage/fuzzamoto/tree/master/fuzzamoto-libafl/src/stages/probe.rs)
+prepends `Probe` to a testcase and runs it once). The decoded observations
+(e.g. "the node sent a `getblocktxn`/`cmpctblock`/block announcement, triggered
+by instruction N, on connection C") are stored as per-testcase metadata.
+Generators then use that metadata to insert the appropriate response right after
+the instruction that triggered it.
 
 ### Minimizers
 

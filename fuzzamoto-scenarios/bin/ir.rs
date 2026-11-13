@@ -2,10 +2,14 @@
 use std::time::{Duration, Instant};
 
 use bitcoin::{
-    bip152::BlockTransactionsRequest,
+    VarInt,
+    bip152::{BlockTransactionsRequest, HeaderAndShortIds},
+    block::Header as BitcoinHeader,
     consensus::{Decodable, encode},
     hashes::Hash,
-    p2p::{message::NetworkMessage, message_compact_blocks::SendCmpct},
+    p2p::{
+        message::NetworkMessage, message_blockdata::Inventory, message_compact_blocks::SendCmpct,
+    },
 };
 use fuzzamoto::{
     connections::Transport,
@@ -18,7 +22,7 @@ use fuzzamoto::{
 };
 
 #[cfg(feature = "nyx")]
-use fuzzamoto_nyx_sys::*;
+use fuzzamoto_nyx_sys::{nyx_dump_file_to_host, nyx_println};
 use io::Cursor;
 #[cfg(feature = "nyx")]
 use std::ffi::CString;
@@ -36,7 +40,8 @@ use fuzzamoto::oracles::{NetSplitContext, NetSplitOracle};
 use fuzzamoto::oracles::{ConsensusContext, ConsensusOracle};
 
 use fuzzamoto_ir::{
-    ProbeResult, ProbeResults, Program, ProgramContext, RecentBlock,
+    BlockAnnouncement, CompactBlockAnnouncement, ProbeResult, ProbeResults, Program,
+    ProgramContext, RecentBlock,
     compiler::{CompiledAction, CompiledMetadata, CompiledProgram, Compiler},
 };
 
@@ -54,6 +59,10 @@ const OP_TRUE_SCRIPT_PUBKEY: [u8; 34] = [
     0u8, 32, 74, 232, 21, 114, 240, 110, 27, 136, 253, 92, 237, 122, 26, 0, 9, 69, 67, 46, 131,
     225, 85, 30, 111, 114, 30, 233, 192, 11, 140, 195, 50, 96,
 ];
+
+/// Messages the scenario records and feeds through the probe: `getblocktxn` requests, `cmpctblock`
+/// announcements, and the `headers`/`inv` block announcements that drive the BIP152 fetch path.
+const RECORDED_COMMANDS: [&str; 4] = ["getblocktxn", "cmpctblock", "headers", "inv"];
 
 /// `IrScenario` is a scenario with the same context as `GenericScenario` but it operates on
 /// `fuzzamoto_ir::CompiledProgram`s as input.
@@ -79,17 +88,33 @@ pub struct TestCase {
     program: CompiledProgram,
 }
 
+/// Map a received message to the probe results it yields. Block announcements (`headers`/`inv`)
+/// can reference several known blocks at once and produce one result per block; every other
+/// command produces exactly one result.
 fn probe_result_mapper(
     action_index: usize,
     metadata: &CompiledMetadata,
-) -> impl Fn((usize, String, Vec<u8>)) -> ProbeResult {
-    move |(conn, s, mut bytes): (usize, String, Vec<u8>)| match s.as_str() {
+) -> impl Fn((usize, String, Vec<u8>)) -> Vec<ProbeResult> {
+    move |(conn, s, bytes): (usize, String, Vec<u8>)| match s.as_str() {
+        "headers" | "inv" => block_announcement_results(conn, &s, &bytes, action_index, metadata),
+        _ => vec![single_probe_result(conn, &s, bytes, action_index, metadata)],
+    }
+}
+
+fn single_probe_result(
+    conn: usize,
+    s: &str,
+    mut bytes: Vec<u8>,
+    action_index: usize,
+    metadata: &CompiledMetadata,
+) -> ProbeResult {
+    match s {
         "getblocktxn" => {
             let Ok(request) = BlockTransactionsRequest::consensus_decode_from_finite_reader(
                 &mut Cursor::new(&mut bytes),
             ) else {
                 return ProbeResult::Failure {
-                    command: s.clone(),
+                    command: s.to_string(),
                     reason: "getblocktxn: Fail to call consensus_decode_from_finite_reader"
                         .to_string(),
                 };
@@ -97,14 +122,14 @@ fn probe_result_mapper(
 
             let Some((_, block_var, _, _)) = metadata.block_variables(&request.block_hash) else {
                 return ProbeResult::Failure {
-                    command: s.clone(),
+                    command: s.to_string(),
                     reason: "getblocktxn: block hash is not registered in the metadata".to_string(),
                 };
             };
 
             let Some(conn_var) = metadata.connection_map().get(&conn) else {
                 return ProbeResult::Failure {
-                    command: s.clone(),
+                    command: s.to_string(),
                     reason: "getblocktxn: couldn't find matching connection var".to_string(),
                 };
             };
@@ -122,10 +147,142 @@ fn probe_result_mapper(
 
             ProbeResult::GetBlockTxn { get_block_txn }
         }
+        "cmpctblock" => {
+            let Ok(cmpct) = HeaderAndShortIds::consensus_decode_from_finite_reader(
+                &mut Cursor::new(&mut bytes),
+            ) else {
+                return ProbeResult::Failure {
+                    command: s.to_string(),
+                    reason: "cmpctblock: Fail to call consensus_decode_from_finite_reader"
+                        .to_string(),
+                };
+            };
+
+            let block_hash = cmpct.header.block_hash();
+            let Some((_, block_var, _, _)) = metadata.block_variables(&block_hash) else {
+                return ProbeResult::Failure {
+                    command: s.to_string(),
+                    reason: "cmpctblock: block hash is not registered in the metadata".to_string(),
+                };
+            };
+
+            let Some(conn_var) = metadata.connection_map().get(&conn) else {
+                return ProbeResult::Failure {
+                    command: s.to_string(),
+                    reason: "cmpctblock: couldn't find matching connection var".to_string(),
+                };
+            };
+
+            let num_block_txs = cmpct.prefilled_txs.len() + cmpct.short_ids.len();
+
+            // The prefilled `idx` fields are differentially encoded; reconstruct absolute
+            // block-level positions (0 = coinbase) so a generator knows which transactions were
+            // prefilled vs. only referenced by short id.
+            let mut prefilled_indexes = Vec::with_capacity(cmpct.prefilled_txs.len());
+            let mut running = 0usize;
+            for prefilled in &cmpct.prefilled_txs {
+                let abs = running + prefilled.idx as usize;
+                prefilled_indexes.push(abs);
+                running = abs + 1;
+            }
+
+            ProbeResult::CompactBlock {
+                announcement: CompactBlockAnnouncement {
+                    connection_index: *conn_var,
+                    triggering_instruction_index: metadata.instruction_indices()[action_index],
+                    block_variable: block_var,
+                    num_block_txs,
+                    prefilled_indexes,
+                },
+            }
+        }
         _ => unreachable!(
             "Unexpected command; The filter must ensure only supported commands reach this point"
         ),
     }
+}
+
+/// Build one [`ProbeResult::BlockAnnounced`] per distinct known block referenced by a `headers` or
+/// `inv` message. Returns no results if the message references no blocks at all (e.g. a tx-only
+/// `inv`), and a single [`ProbeResult::Failure`] if it couldn't be decoded, only referenced blocks
+/// we don't know about, or arrived on an unknown connection.
+fn block_announcement_results(
+    conn: usize,
+    command: &str,
+    bytes: &[u8],
+    action_index: usize,
+    metadata: &CompiledMetadata,
+) -> Vec<ProbeResult> {
+    let failure = |reason: String| {
+        vec![ProbeResult::Failure {
+            command: command.to_string(),
+            reason,
+        }]
+    };
+
+    let mut block_hashes = Vec::new();
+    match command {
+        "headers" => {
+            let mut cursor = Cursor::new(bytes);
+            let Ok(count) = VarInt::consensus_decode(&mut cursor) else {
+                return failure("headers: failed to decode header count".to_string());
+            };
+            for _ in 0..count.0 {
+                let Ok(header) = BitcoinHeader::consensus_decode(&mut cursor) else {
+                    break;
+                };
+                // Each header in a `headers` message is followed by a (always 0) txn count VarInt.
+                let _ = VarInt::consensus_decode(&mut cursor);
+                block_hashes.push(header.block_hash());
+            }
+        }
+        "inv" => {
+            let Ok(inventory) =
+                Vec::<Inventory>::consensus_decode_from_finite_reader(&mut Cursor::new(bytes))
+            else {
+                return failure("inv: failed to decode inventory".to_string());
+            };
+            block_hashes.extend(inventory.iter().filter_map(|item| match item {
+                Inventory::Block(hash)
+                | Inventory::WitnessBlock(hash)
+                | Inventory::CompactBlock(hash) => Some(*hash),
+                _ => None,
+            }));
+        }
+        _ => unreachable!("only `headers` and `inv` are block announcements"),
+    }
+
+    // Not a block announcement (e.g. a tx-only `inv`, or an empty `headers`): nothing to record.
+    if block_hashes.is_empty() {
+        return Vec::new();
+    }
+
+    let mut block_vars: Vec<usize> = Vec::new();
+    for hash in &block_hashes {
+        if let Some((_, block_var, _, _)) = metadata.block_variables(hash)
+            && !block_vars.contains(&block_var)
+        {
+            block_vars.push(block_var);
+        }
+    }
+    if block_vars.is_empty() {
+        return failure(format!("{command}: no known block announced"));
+    }
+    let Some(conn_var) = metadata.connection_map().get(&conn) else {
+        return failure(format!("{command}: couldn't find matching connection var"));
+    };
+
+    let triggering_instruction_index = metadata.instruction_indices()[action_index];
+    block_vars
+        .into_iter()
+        .map(|block_variable| ProbeResult::BlockAnnounced {
+            announcement: BlockAnnouncement {
+                connection_index: *conn_var,
+                triggering_instruction_index,
+                block_variable,
+            },
+        })
+        .collect()
 }
 
 impl<'a> ScenarioInput<'a> for TestCase {
@@ -220,7 +377,7 @@ where
             const CONTEXT_FILE_NAME: &str = "ir.context";
             unsafe {
                 nyx_dump_file_to_host(
-                    CONTEXT_FILE_NAME.as_ptr() as *const i8,
+                    CONTEXT_FILE_NAME.as_ptr().cast::<i8>(),
                     CONTEXT_FILE_NAME.len(),
                     full_context.as_ptr(),
                     full_context.len(),
@@ -277,7 +434,7 @@ where
     }
 
     fn process_actions(&mut self, mut program: CompiledProgram) {
-        let message_filter = |(s, _): &(String, Vec<u8>)| ["getblocktxn"].contains(&s.as_str());
+        let message_filter = |(s, _): &(String, Vec<u8>)| RECORDED_COMMANDS.contains(&s.as_str());
         let mut non_probe_action_count = 0;
         for action in program.actions.drain(..) {
             match action {
@@ -355,7 +512,7 @@ where
                                         .into_iter()
                                         .filter(message_filter)
                                         .map(|(s, v)| (dst, s, v))
-                                        .map(probe_result_mapper(
+                                        .flat_map(probe_result_mapper(
                                             non_probe_action_count,
                                             &program.metadata,
                                         )),
@@ -397,6 +554,41 @@ where
     fn ping_connections(&mut self) {
         for connection in &mut self.inner.connections {
             let _ = connection.ping();
+        }
+    }
+
+    /// Like `ping_connections`, but records the messages flushed during the ping/pong roundtrip and
+    /// feeds them through the probe so asynchronously-queued announcements are captured. Each
+    /// captured message is attributed to the last action instruction in the program, so generators
+    /// responding to it insert their reply at the end of the program.
+    fn recording_drain(&mut self, metadata: &CompiledMetadata) {
+        let message_filter = |(s, _): &(String, Vec<u8>)| RECORDED_COMMANDS.contains(&s.as_str());
+
+        // No actions means no instruction to attribute captures to; fall back to a plain ping.
+        let num_actions = metadata.instruction_indices().len();
+        if num_actions == 0 {
+            self.ping_connections();
+            return;
+        }
+        let action_index = num_actions - 1;
+
+        let num_connections = self.inner.connections.len();
+        for dst in 0..num_connections {
+            if let Some(connection) = self.inner.connections.get_mut(dst) {
+                // The message we send is irrelevant; the two pings inside `send_and_recv` force the
+                // node's `SendMessages` to run and flush any queued messages into the recording
+                // window. We send an extra ping for that purpose.
+                let ping = ("ping".to_string(), 0x0u64.to_le_bytes().to_vec());
+                if let Ok(received) = connection.send_and_recv(&ping, true) {
+                    self.probe_results.extend(
+                        received
+                            .into_iter()
+                            .filter(message_filter)
+                            .map(|(s, v)| (dst, s, v))
+                            .flat_map(probe_result_mapper(action_index, metadata)),
+                    );
+                }
+            }
         }
     }
 
@@ -503,7 +695,7 @@ fn dump_file_to_host(path: &str, dump_name: &str) {
     if let Ok(data) = std::fs::read(path) {
         unsafe {
             nyx_dump_file_to_host(
-                dump_name.as_ptr() as *const i8,
+                dump_name.as_ptr().cast::<i8>(),
                 dump_name.len(),
                 data.as_ptr(),
                 data.len(),
@@ -557,7 +749,16 @@ where
     fn run(&mut self, testcase: TestCase) -> ScenarioResult {
         let metadata = testcase.program.metadata.clone();
         self.process_actions(testcase.program);
-        self.ping_connections();
+
+        // Drain each connection with recording enabled when probing so that messages the node
+        // queued asynchronously (e.g. an unsolicited high-bandwidth `cmpctblock`, or a `headers`/
+        // `inv` block announcement) after the last send on that connection are still observed. When
+        // not probing, `recording_received_messages` is false and this is just a plain ping.
+        if self.recording_received_messages {
+            self.recording_drain(&metadata);
+        } else {
+            self.ping_connections();
+        }
 
         if self.recording_received_messages
             && let Some(ret) = probe_recent_block_hashes(&self.inner.target, &metadata)
