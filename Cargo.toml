@@ -5,6 +5,7 @@ members = [
   "fuzzamoto-cli",
   "fuzzamoto-ir",
   "fuzzamoto-nyx-sys",
+  "fuzzamoto-bedrock-sys",
   "fuzzamoto-scenarios",
   "fuzzamoto-libafl",
 ]

@@ -1,6 +1,11 @@
 #[cfg(feature = "nyx")]
 use fuzzamoto_nyx_sys::*;
 
+#[cfg(feature = "bedrock")]
+use fuzzamoto_bedrock_sys::{
+    bedrock_fail, bedrock_get_fuzz_input, bedrock_init, bedrock_release, bedrock_skip,
+};
+
 /// `Runner` provides an abstraction for a fuzzamoto test case runner (e.g. run under nyx,
 /// libafl-qemu, local system, etc.)
 pub trait Runner {
@@ -91,9 +96,65 @@ impl Drop for NyxRunner {
     }
 }
 
+/// `BedrockRunner` runs test cases inside a bedrock VM.
+///
+/// The counterpart to [`NyxRunner`], and structurally the same: initialize the
+/// agent, pull an input, report the outcome on drop. The difference is what
+/// happens between test cases. Nyx resets one long-lived VM to a snapshot;
+/// bedrock forks a fresh copy-on-write VM per test case from a checkpoint taken
+/// at the first [`Self::get_fuzz_input`] call. So this runner never sees a
+/// second input — the VM it lives in is discarded once it reports, and the next
+/// test case starts in a new fork of the same pristine moment.
+#[cfg(feature = "bedrock")]
+pub struct BedrockRunner {
+    max_input_size: usize,
+}
+
+#[cfg(feature = "bedrock")]
+impl Runner for BedrockRunner {
+    fn new() -> Self {
+        let max_input_size = unsafe { bedrock_init() };
+        Self { max_input_size }
+    }
+
+    fn get_fuzz_input(&self) -> Vec<u8> {
+        let mut data = vec![0u8; self.max_input_size];
+        let len = unsafe { bedrock_get_fuzz_input(data.as_mut_ptr(), data.len()) };
+        data.truncate(len);
+        data
+    }
+
+    fn fail(&self, message: &str) {
+        let c_message = std::ffi::CString::new(message).unwrap_or_default();
+        unsafe {
+            bedrock_fail(c_message.as_ptr());
+        }
+    }
+
+    fn skip(&self) {
+        unsafe {
+            bedrock_skip();
+        }
+    }
+}
+
+#[cfg(feature = "bedrock")]
+impl Drop for BedrockRunner {
+    fn drop(&mut self) {
+        unsafe {
+            bedrock_release();
+        }
+    }
+}
+
+#[cfg(all(feature = "nyx", feature = "bedrock"))]
+compile_error!("features `nyx` and `bedrock` are mutually exclusive");
+
 #[cfg(feature = "nyx")]
 type DefaultRunner = NyxRunner;
-#[cfg(not(feature = "nyx"))]
+#[cfg(feature = "bedrock")]
+type DefaultRunner = BedrockRunner;
+#[cfg(not(any(feature = "nyx", feature = "bedrock")))]
 type DefaultRunner = LocalRunner;
 
 pub struct StdRunner {

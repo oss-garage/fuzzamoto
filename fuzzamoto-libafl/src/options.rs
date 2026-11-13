@@ -31,6 +31,7 @@ pub struct FuzzerOptions {
     #[arg(short, long, help = "Output directory")]
     pub output: String,
 
+    #[cfg(feature = "nyx")]
     #[arg(short, long, help = "Shared directory")]
     pub share: String,
 
@@ -39,6 +40,26 @@ pub struct FuzzerOptions {
 
     #[arg(long, help = "Log file")]
     pub log: Option<String>,
+
+    #[cfg(feature = "bedrock")]
+    #[arg(long, help = "Bedrock: path to the guest vmlinux ELF")]
+    pub vmlinux: Option<String>,
+
+    #[cfg(feature = "bedrock")]
+    #[arg(long, help = "Bedrock: path to the guest initramfs")]
+    pub initramfs: Option<String>,
+
+    #[cfg(feature = "bedrock")]
+    #[arg(long, help = "Bedrock: guest memory in MB", default_value_t = 8192)]
+    pub guest_memory_mb: usize,
+
+    #[cfg(feature = "bedrock")]
+    #[arg(
+        long,
+        help = "Bedrock: setup timeout in seconds",
+        default_value_t = 120
+    )]
+    pub setup_timeout: u64,
 
     #[arg(long, help = "Timeout in milli-seconds", default_value = "1000")]
     pub timeout: u32,
@@ -181,6 +202,7 @@ impl FuzzerOptions {
         PathBuf::from(&self.input)
     }
 
+    #[cfg(feature = "nyx")]
     pub fn shared_dir(&self) -> PathBuf {
         PathBuf::from(&self.share)
     }
