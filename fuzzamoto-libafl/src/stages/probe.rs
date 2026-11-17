@@ -125,7 +125,7 @@ fn process_probe_results(metadata: &mut Option<PerTestcaseMetadata>, results: &P
                     .add_block_announcement(announcement.clone());
             }
             ProbeResult::Failure { command, reason } => {
-                log::info!("Command {command:?} couln't be parsed; reason: {reason:?}");
+                log::info!("Command {command:?} couldn't be parsed; reason: {reason:?}");
             }
             ProbeResult::RecentBlockes { result } => {
                 metadata
