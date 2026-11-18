@@ -67,7 +67,7 @@ where
 
         let tc_data = if is_first
             && let Some(id) = current_id
-            && let Some(meta) = rt_data.metadata_mut(id)
+            && let Some(meta) = rt_data.metadata_mut(id, input.ir())
         {
             Some(meta)
         } else {
@@ -217,7 +217,7 @@ where
 
         let tc_data = if is_first
             && let Some(id) = current_id
-            && let Some(meta) = rt_data.metadata_mut(id)
+            && let Some(meta) = rt_data.metadata_mut(id, input.ir())
         {
             Some(meta)
         } else {
