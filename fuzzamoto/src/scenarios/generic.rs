@@ -170,10 +170,16 @@ impl<TX: Transport, T: Target<TX>> GenericScenario<TX, T> {
                 u32::try_from(time).map_err(|_| "Failed to convert time to u32".to_string())?,
             );
 
-            // Send block to the first connection
-            connections[0]
-                .0
-                .send(&("block".to_string(), encode::serialize(&block)))?;
+            if cfg!(feature = "min_chain_work") {
+                // The setup chain has less work than the raised minimum, so the node would
+                // ignore it as unrequested low-work blocks if it was sent over p2p.
+                target.submit_block(&block)?;
+            } else {
+                // Send block to the first connection
+                connections[0]
+                    .0
+                    .send(&("block".to_string(), encode::serialize(&block)))?;
+            }
 
             target.set_mocktime(time as u64)?;
 

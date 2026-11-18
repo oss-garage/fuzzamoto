@@ -332,6 +332,14 @@ pub enum Operation {
         required_encoding: ScriptIntEncoding,
         key_count_encoding: ScriptIntEncoding,
     },
+    /// Build a chain of `count` headers on top of the input header and send it as a single
+    /// `headers` message. Consecutive timestamps differ by `time_step` seconds. Compilation is
+    /// deterministic, so sending the same chain again (e.g. during the redownload phase of a
+    /// low-work headers sync) produces identical headers.
+    SendHeaderChain {
+        count: u16,
+        time_step: u16,
+    },
 }
 
 impl fmt::Display for Operation {
@@ -558,6 +566,9 @@ impl fmt::Display for Operation {
             Operation::SendTx => write!(f, "SendTx"),
             Operation::SendTxNoWit => write!(f, "SendTxNoWit"),
             Operation::SendHeader => write!(f, "SendHeader"),
+            Operation::SendHeaderChain { count, time_step } => {
+                write!(f, "SendHeaderChain({count}, {time_step})")
+            }
             Operation::SendBlock => write!(f, "SendBlock"),
             Operation::SendBlockNoWit => write!(f, "SendBlockNoWit"),
             Operation::SendGetCFilters => write!(f, "SendGetCFilters"),
@@ -709,6 +720,7 @@ impl Operation {
             | Operation::SendTx
             | Operation::SendTxNoWit
             | Operation::SendHeader
+            | Operation::SendHeaderChain { .. }
             | Operation::SendBlock
             | Operation::SendGetCFilters
             | Operation::SendGetCFHeaders
@@ -877,6 +889,7 @@ impl Operation {
             | Operation::SendTx
             | Operation::SendTxNoWit
             | Operation::SendHeader
+            | Operation::SendHeaderChain { .. }
             | Operation::SendBlock
             | Operation::SendBlockNoWit
             | Operation::SendGetCFilters
@@ -1074,6 +1087,7 @@ impl Operation {
             Operation::SendAddr => vec![],
             Operation::SendAddrV2 => vec![],
             Operation::SendHeader => vec![],
+            Operation::SendHeaderChain { .. } => vec![Variable::Header],
             Operation::SendBlock => vec![],
             Operation::SendBlockNoWit => vec![],
             Operation::SendGetCFilters => vec![],
@@ -1190,7 +1204,9 @@ impl Operation {
             Operation::SendGetAddr => vec![Variable::Connection],
             Operation::SendAddr => vec![Variable::Connection, Variable::ConstAddrList],
             Operation::SendAddrV2 => vec![Variable::Connection, Variable::ConstAddrListV2],
-            Operation::SendHeader => vec![Variable::Connection, Variable::Header],
+            Operation::SendHeader | Operation::SendHeaderChain { .. } => {
+                vec![Variable::Connection, Variable::Header]
+            }
             Operation::SendBlock | Operation::SendBlockNoWit => {
                 vec![Variable::Connection, Variable::Block]
             }
@@ -1400,6 +1416,7 @@ impl Operation {
             | Operation::SendTx
             | Operation::SendTxNoWit
             | Operation::SendHeader
+            | Operation::SendHeaderChain { .. }
             | Operation::SendBlock
             | Operation::SendBlockNoWit
             | Operation::SendGetCFilters
