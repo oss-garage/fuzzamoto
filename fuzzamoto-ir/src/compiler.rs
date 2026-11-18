@@ -43,6 +43,12 @@ pub struct Compiler {
     variables: Vec<Box<dyn Any>>,
     output: CompiledProgram,
     connection_counter: usize,
+
+    /// Txids of a block variable's non-coinbase transactions, by its variable
+    /// index (block variables are never mutated). `AddPrefillTx` looks up its
+    /// tx's position here instead of recomputing every txid in the block for
+    /// each prefill, which made programs with many prefills compile slowly.
+    block_txids: HashMap<usize, Vec<Txid>>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -562,6 +568,7 @@ impl Compiler {
                 metadata: CompiledMetadata::new(),
             },
             connection_counter: 0,
+            block_txids: HashMap::new(),
         }
     }
 
@@ -1937,10 +1944,19 @@ impl Compiler {
                 let tx_to_prefill_id = self.get_input::<Tx>(&instruction.inputs, 2)?.id;
                 // Find the position of this tx within the block's non-coinbase transactions.
                 // If the tx is not part of this block, skip it silently.
-                let Some(position) = block.txdata[1..]
-                    .iter()
-                    .position(|t| t.compute_txid() == tx_to_prefill_id)
-                else {
+                let block_var_index = instruction.inputs[1];
+                let position = if let Some(txids) = self.block_txids.get(&block_var_index) {
+                    txids.iter().position(|txid| *txid == tx_to_prefill_id)
+                } else {
+                    let txids: Vec<Txid> = block.txdata[1..]
+                        .iter()
+                        .map(Transaction::compute_txid)
+                        .collect();
+                    let position = txids.iter().position(|txid| *txid == tx_to_prefill_id);
+                    self.block_txids.insert(block_var_index, txids);
+                    position
+                };
+                let Some(position) = position else {
                     return Ok(());
                 };
 
@@ -2540,6 +2556,139 @@ mod tests {
         let decoded = BlockTransactionsRequest::consensus_decode(&mut bytes.as_slice())
             .expect("sanitized getblocktxn request should decode");
         assert_eq!(decoded.indexes, sanitized);
+    }
+
+    #[test]
+    fn compile_compact_block_prefills_txs_at_their_block_positions() {
+        use crate::{
+            Variable,
+            generators::{Generator, tx::CoinbaseTxGenerator},
+        };
+        use bitcoin::{Block, bip152::HeaderAndShortIds, consensus::deserialize};
+        use rand::{SeedableRng, rngs::SmallRng};
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mut builder = ProgramBuilder::new(ProgramContext {
+            num_nodes: 1,
+            num_connections: 1,
+            timestamp: 1_296_688_802,
+        });
+
+        let conn = builder.force_append_expect_output(vec![], &Operation::LoadConnection(0));
+        let header = builder.force_append_expect_output(
+            vec![],
+            &Operation::LoadHeader {
+                prev: [1; 32],
+                merkle_root: [2; 32],
+                nonce: 0,
+                bits: 0x207f_ffff,
+                time: 1_296_688_602,
+                version: 4,
+                height: 200,
+            },
+        );
+        let time = builder.force_append_expect_output(vec![], &Operation::LoadTime(1_296_688_802));
+
+        // 40 txs in the block, and one that is not in it.
+        let txs: Vec<usize> = (0..41u8)
+            .map(|i| {
+                let txo = append_op_true_txo(&mut builder, [i + 1; 32], 10_000);
+                build_single_input_transaction(&mut builder, txo.index, 5_000).index
+            })
+            .collect();
+        let (block_txs, outsider) = (&txs[..40], txs[40]);
+
+        let mut_txs =
+            builder.force_append_expect_output(vec![], &Operation::BeginBlockTransactions);
+        for tx in block_txs {
+            builder.force_append(vec![mut_txs.index, *tx], &Operation::AddTx);
+        }
+        let const_txs = builder
+            .force_append_expect_output(vec![mut_txs.index], &Operation::EndBlockTransactions);
+        let version = builder.force_append_expect_output(vec![], &Operation::LoadBlockVersion(5));
+        CoinbaseTxGenerator
+            .generate(&mut builder, &mut rng, None)
+            .expect("coinbase generates");
+        let coinbase = builder
+            .get_random_variable(&mut rng, &Variable::CoinbaseTx)
+            .expect("coinbase var");
+        let block = builder
+            .append(Instruction {
+                inputs: vec![
+                    coinbase.index,
+                    header.index,
+                    time.index,
+                    version.index,
+                    const_txs.index,
+                ],
+                operation: Operation::BuildBlock,
+            })
+            .expect("BuildBlock appends")[1]
+            .clone();
+        builder.force_append(vec![conn.index, block.index], &Operation::SendBlock);
+
+        // Out of block order, a duplicate, and a tx not in the block (skipped).
+        let mut_prefill =
+            builder.force_append_expect_output(vec![], &Operation::BeginPrefillTransactions);
+        for tx in [
+            block_txs[17],
+            block_txs[0],
+            outsider,
+            block_txs[39],
+            block_txs[17],
+        ] {
+            builder.force_append(
+                vec![mut_prefill.index, block.index, tx],
+                &Operation::AddPrefillTx,
+            );
+        }
+        let prefill = builder.force_append_expect_output(
+            vec![mut_prefill.index],
+            &Operation::EndPrefillTransactions,
+        );
+        let nonce = builder.force_append_expect_output(vec![], &Operation::LoadNonce(9));
+        let cmpct = builder.force_append_expect_output(
+            vec![block.index, nonce.index, prefill.index],
+            &Operation::BuildCompactBlock,
+        );
+        builder.force_append(vec![conn.index, cmpct.index], &Operation::SendCompactBlock);
+
+        let program = builder.finalize().expect("valid program");
+        let compiled = Compiler::new().compile(&program).expect("program compiles");
+        let payload = |name: &str| {
+            compiled
+                .actions
+                .iter()
+                .find_map(|a| match a {
+                    CompiledAction::SendRawMessage(_, cmd, payload)
+                        if cmd.trim_end_matches('\0') == name =>
+                    {
+                        Some(payload.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {name} message"))
+        };
+        let block: Block = deserialize(&payload("block")).expect("block decodes");
+        let cmpct: HeaderAndShortIds = deserialize(&payload("cmpctblock")).expect("cmpctblock");
+
+        assert_eq!(block.txdata.len(), 41);
+        // Prefilled indexes are differentially encoded; the coinbase is always first.
+        let mut last = -1i64;
+        let prefilled: Vec<(usize, Txid)> = cmpct
+            .prefilled_txs
+            .iter()
+            .map(|p| {
+                last += i64::from(p.idx) + 1;
+                (usize::try_from(last).unwrap(), p.tx.compute_txid())
+            })
+            .collect();
+        let expected: Vec<(usize, Txid)> = [0, 1, 18, 40]
+            .into_iter()
+            .map(|i| (i, block.txdata[i].compute_txid()))
+            .collect();
+        assert_eq!(prefilled, expected);
+        assert_eq!(cmpct.short_ids.len(), 41 - expected.len());
     }
 
     #[test]
