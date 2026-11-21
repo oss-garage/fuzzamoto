@@ -7,7 +7,6 @@ src:*/qt/*
 src:*/ipc/*
 src:*/wallet/*
 src:*/univalue/*
-src:*libevent/*
 src:*sqlite/*
 
 httpserver.h
